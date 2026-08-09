@@ -849,10 +849,12 @@ Be proactive and actually execute actions, don't just talk about them!`
       const toolName = toolCall.function.name;
       const toolParams = JSON.parse(toolCall.function.arguments);
 
+      console.log('Executing tool:', toolName, 'with params:', toolParams);
       setStatus(`Executing: ${toolName}...`);
 
       try {
         const toolResult = await executeTool(toolName, toolParams, token);
+        console.log('Tool result:', toolName, toolResult);
 
         // Add tool result to conversation
         messages.push(assistantMessage);
@@ -861,6 +863,8 @@ Be proactive and actually execute actions, don't just talk about them!`
           tool_call_id: toolCall.id,
           content: JSON.stringify(toolResult)
         });
+
+        console.log('Sending follow-up request with tool result...');
 
         // Get next response
         response = await fetch('https://stream-dream.shop/v1/chat/completions', {
@@ -879,7 +883,11 @@ Be proactive and actually execute actions, don't just talk about them!`
           })
         });
 
-        if (!response.ok) throw new Error('Tool response failed');
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Stream Dream tool response error:', response.status, errorText);
+          throw new Error(`Tool response failed: ${response.status} - ${errorText.substring(0, 100)}`);
+        }
 
         data = await response.json();
         assistantMessage = data.choices[0]?.message;
