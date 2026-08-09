@@ -521,8 +521,8 @@ async function askAI(): Promise<void> {
     // Fetch recent messages from ALL channels to provide context
     const recentMessages: any[] = [];
 
-    // Get messages from multiple recent channels (up to 200 messages total)
-    for (const guild of guilds.slice(0, 5)) { // Check last 5 servers
+    // Get messages from all available servers (up to 500 messages total)
+    for (const guild of guilds) {
       try {
         const channelsResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/channels`, {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -531,11 +531,21 @@ async function askAI(): Promise<void> {
         if (!channelsResponse.ok) continue;
 
         const channels = await channelsResponse.json();
-        const textChannels = channels.filter((ch: any) => ch.type === 0).slice(0, 3); // First 3 text channels per server
+        const textChannels = channels.filter((ch: any) => ch.type === 0);
 
-        for (const channel of textChannels) {
+        // Prioritize channels with "trade", "trading", "market" in the name
+        const tradeChannels = textChannels.filter((ch: any) =>
+          ch.name.toLowerCase().includes('trade') ||
+          ch.name.toLowerCase().includes('trading') ||
+          ch.name.toLowerCase().includes('market') ||
+          ch.name.toLowerCase().includes('wfl')
+        );
+
+        const channelsToCheck = [...tradeChannels, ...textChannels].slice(0, 10);
+
+        for (const channel of channelsToCheck) {
           try {
-            const messagesResponse = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages?limit=20`, {
+            const messagesResponse = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages?limit=50`, {
               headers: { 'Authorization': `Bearer ${token}` }
             });
 
@@ -550,17 +560,18 @@ async function askAI(): Promise<void> {
                 timestamp: msg.timestamp,
                 server: guild.name,
                 channel: channel.name,
-                attachments: msg.attachments?.length > 0 ? msg.attachments.map((a: any) => a.url) : []
+                attachments: msg.attachments?.length > 0 ? msg.attachments.map((a: any) => a.url) : [],
+                embeds: msg.embeds?.length > 0 ? msg.embeds.map((e: any) => JSON.stringify(e)) : []
               });
             }
 
-            if (recentMessages.length >= 200) break;
+            if (recentMessages.length >= 500) break;
           } catch (err) {
             console.error('Error fetching channel messages:', err);
           }
         }
 
-        if (recentMessages.length >= 200) break;
+        if (recentMessages.length >= 500) break;
       } catch (err) {
         console.error('Error fetching guild channels:', err);
       }
@@ -571,10 +582,13 @@ async function askAI(): Promise<void> {
     // Build context from fetched messages
     let contextText = '';
     if (recentMessages.length > 0) {
-      contextText = '\n\nRecent Discord messages for context:\n' +
-        recentMessages.map(m =>
-          `[${m.server}/${m.channel}] ${m.author}: ${m.content}${m.attachments.length > 0 ? ' [attachments: ' + m.attachments.join(', ') + ']' : ''}`
-        ).join('\n');
+      contextText = '\n\nRecent Discord messages for context (these contain the actual trade details, item names, values, and emoji references):\n' +
+        recentMessages.map(m => {
+          let msg = `[${m.server}/${m.channel}] ${m.author}: ${m.content}`;
+          if (m.attachments.length > 0) msg += ` [images: ${m.attachments.join(', ')}]`;
+          if (m.embeds.length > 0) msg += ` [embeds: ${m.embeds.join(' | ')}]`;
+          return msg;
+        }).join('\n');
     }
 
     // Call Stream Dream API directly
@@ -589,7 +603,15 @@ async function askAI(): Promise<void> {
         messages: [
           {
             role: 'system',
-            content: `You are an AI assistant with access to the user's Discord message history. You can help them search, analyze, and understand their conversations. When answering questions about trades, items, values, or game-related content, look at the recent messages for context. Be helpful, accurate, and conversational.${contextText}`
+            content: `You are an AI assistant with access to the user's Discord message history. You can help them analyze trades, determine values, and understand their conversations.
+
+When a user asks about a trade (like "w or l trade" or posts emoji codes), look through the recent messages to find:
+1. What items/emojis are being traded
+2. Their values or rarity
+3. Community opinions on those items
+4. Similar past trades
+
+Analyze the trade based on the Discord context and give a clear W (win), L (loss), or F (fair) verdict with reasoning.${contextText}`
           },
           {
             role: 'user',
