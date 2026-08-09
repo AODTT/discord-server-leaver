@@ -642,7 +642,7 @@ function renderAITab(): void {
     container.innerHTML = `
       <div class="ai-credits">
         <div class="count">Stream Dream AI</div>
-        <div class="label">Full Discord API access via AI</div>
+        <div class="label">Analyzes your Discord messages</div>
       </div>
 
       <div id="ai-chat-history" style="max-height: 300px; overflow-y: auto; margin-bottom: 16px; padding: 12px; background: #2f3136; border-radius: 8px;">
@@ -658,7 +658,7 @@ function renderAITab(): void {
       <button id="clear-chat" class="danger" style="width: 100%;">Clear Chat History</button>
 
       <div class="notice" style="margin-top: 16px;">
-        <strong>Capabilities:</strong> I can fetch messages, send messages, search, analyze trades, get user info, add reactions, create DMs, and more!
+        <strong>Capabilities:</strong> I analyze your Discord messages to answer questions about trades, find information, and understand conversations. I see up to 500 recent messages from your servers.
       </div>
     `;
 
@@ -750,16 +750,96 @@ async function askAI(): Promise<void> {
   thinkingMsg.className = 'message-item';
   thinkingMsg.innerHTML = `
     <div class="meta" style="color: #57f287;">AI Buddy</div>
-    <div class="content" style="color: #72767d;">Thinking...</div>
+    <div class="content" style="color: #72767d;">Fetching Discord messages...</div>
   `;
   chatHistory.appendChild(thinkingMsg);
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
   textarea.value = '';
   if (imageInput) imageInput.value = '';
-  setStatus('Processing...');
+  setStatus('Fetching Discord messages...');
 
   try {
+    // Fetch Discord messages directly using the same API we use everywhere else
+    const recentMessages: any[] = [];
+
+    for (const guild of guilds.slice(0, 10)) {
+      try {
+        const channelsResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/channels`, {
+          headers: { 'Authorization': token }
+        });
+
+        if (!channelsResponse.ok) continue;
+
+        const channels = await channelsResponse.json();
+        const textChannels = channels.filter((ch: any) => ch.type === 0);
+
+        // Prioritize trade channels
+        const tradeChannels = textChannels.filter((ch: any) =>
+          ch.name.toLowerCase().includes('trade') ||
+          ch.name.toLowerCase().includes('trading') ||
+          ch.name.toLowerCase().includes('market') ||
+          ch.name.toLowerCase().includes('wfl')
+        );
+
+        const channelsToCheck = [...tradeChannels, ...textChannels].slice(0, 5);
+
+        for (const channel of channelsToCheck) {
+          try {
+            const messagesResponse = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages?limit=50`, {
+              headers: { 'Authorization': token }
+            });
+
+            if (!messagesResponse.ok) continue;
+
+            const messages = await messagesResponse.json();
+
+            for (const msg of messages) {
+              recentMessages.push({
+                id: msg.id,
+                content: msg.content,
+                author: msg.author.username,
+                authorId: msg.author.id,
+                timestamp: msg.timestamp,
+                server: guild.name,
+                serverId: guild.id,
+                channel: channel.name,
+                channelId: channel.id,
+                attachments: msg.attachments?.length > 0 ? msg.attachments.map((a: any) => a.url) : [],
+                embeds: msg.embeds || []
+              });
+            }
+
+            if (recentMessages.length >= 500) break;
+          } catch (err) {
+            console.error('Error fetching channel:', err);
+          }
+        }
+
+        if (recentMessages.length >= 500) break;
+      } catch (err) {
+        console.error('Error fetching guild:', err);
+      }
+    }
+
+    setStatus(`Analyzing ${recentMessages.length} messages...`);
+
+    // Build context from messages
+    let contextText = '';
+    if (recentMessages.length > 0) {
+      contextText = '\n\nRecent Discord messages:\n' +
+        recentMessages.map(m => {
+          let msg = `[${m.server}/${m.channel}] ${m.author}: ${m.content}`;
+          if (m.attachments.length > 0) msg += ` [images: ${m.attachments.join(', ')}]`;
+          if (m.embeds.length > 0) msg += ` [embeds: ${JSON.stringify(m.embeds)}]`;
+          return msg;
+        }).join('\n');
+    }
+
+    // Get conversation history
+    const historyData = await chrome.storage.local.get(`chat_history_${apiKey}`);
+    const conversationHistory = (historyData[`chat_history_${apiKey}`] || []).slice(-10);
+
     // Build message content
     const messageContent: any[] = [];
 
@@ -777,35 +857,18 @@ async function askAI(): Promise<void> {
       });
     }
 
-    // Get conversation history
-    const historyData = await chrome.storage.local.get(`chat_history_${apiKey}`);
-    const conversationHistory = (historyData[`chat_history_${apiKey}`] || []).slice(-10); // Last 10 messages
-
     const messages = [
       {
         role: 'system',
-        content: `You are an AI assistant with FULL ACCESS to the user's Discord account via API tools. You can:
+        content: `You are an AI assistant with access to the user's Discord message history. I've fetched recent messages from their servers and will provide them to you.
 
-- fetch_messages: Get messages from any channel
-- send_message: Send messages to channels
-- search_messages: Search for specific content
-- get_guilds: List all servers
-- get_channels: List channels in a server
-- get_user: Get user information
-- add_reaction: React to messages
-- create_dm: Create DM channels
+When analyzing trades:
+- Look at the message context to find item names, values, and emoji references
+- Check embeds for bot responses with values
+- Look for patterns in trading channels
+- Give a clear W (win), L (loss), or F (fair) verdict with reasoning
 
-When the user asks you to do something, USE THE APPROPRIATE TOOL. Don't just describe what you would do - actually call the tool!
-
-Examples:
-- "fetch messages from channel 123" → call fetch_messages with channel_id
-- "send hello to channel 456" → call send_message
-- "what servers am I in" → call get_guilds
-- "search for trade in server 789" → call search_messages
-
-For trade analysis, fetch recent messages from trade channels first, then analyze them.
-
-Be proactive and actually execute actions, don't just talk about them!`
+You can see channel names, server names, message content, attachments, and embeds in the context.${contextText}`
       },
       ...conversationHistory.map((m: any) => ({
         role: m.role,
@@ -817,8 +880,8 @@ Be proactive and actually execute actions, don't just talk about them!`
       }
     ];
 
-    // Call Stream Dream API with function calling
-    let response = await fetch('https://stream-dream.shop/v1/chat/completions', {
+    // Call Stream Dream API (simple completion, no function calling)
+    const response = await fetch('https://stream-dream.shop/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -827,8 +890,6 @@ Be proactive and actually execute actions, don't just talk about them!`
       body: JSON.stringify({
         model: 'gpt-5.6-sol',
         messages: messages,
-        tools: getToolDefinitions(),
-        tool_choice: 'auto',
         temperature: 0.7,
         max_tokens: 2000
       })
@@ -840,65 +901,8 @@ Be proactive and actually execute actions, don't just talk about them!`
       throw new Error(`AI request failed: ${response.status}`);
     }
 
-    let data = await response.json();
-    let assistantMessage = data.choices[0]?.message;
-
-    // Handle function calls
-    while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-      const toolCall = assistantMessage.tool_calls[0];
-      const toolName = toolCall.function.name;
-      const toolParams = JSON.parse(toolCall.function.arguments);
-
-      console.log('Executing tool:', toolName, 'with params:', toolParams);
-      setStatus(`Executing: ${toolName}...`);
-
-      try {
-        const toolResult = await executeTool(toolName, toolParams, token);
-        console.log('Tool result:', toolName, toolResult);
-
-        // Add tool result to conversation
-        messages.push(assistantMessage);
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: JSON.stringify(toolResult)
-        });
-
-        console.log('Sending follow-up request with tool result...');
-
-        // Get next response
-        response = await fetch('https://stream-dream.shop/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: 'gpt-5.6-sol',
-            messages: messages,
-            tools: getToolDefinitions(),
-            tool_choice: 'auto',
-            temperature: 0.7,
-            max_tokens: 2000
-          })
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('Stream Dream tool response error:', response.status, errorText);
-          throw new Error(`Tool response failed: ${response.status} - ${errorText.substring(0, 100)}`);
-        }
-
-        data = await response.json();
-        assistantMessage = data.choices[0]?.message;
-      } catch (toolError) {
-        console.error('Tool execution error:', toolError);
-        assistantMessage.content = `Error executing ${toolName}: ${toolError instanceof Error ? toolError.message : 'Unknown error'}`;
-        break;
-      }
-    }
-
-    const reply = assistantMessage?.content || 'Sorry, I could not generate a response.';
+    const data = await response.json();
+    const reply = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
 
     // Replace thinking with actual response
     thinkingMsg.innerHTML = `
@@ -910,12 +914,12 @@ Be proactive and actually execute actions, don't just talk about them!`
     // Save assistant message
     await saveChatMessage('assistant', reply);
 
-    setStatus('Response received');
+    setStatus(`Response received (${recentMessages.length} messages analyzed)`);
   } catch (error) {
     console.error('AI error:', error);
     thinkingMsg.innerHTML = `
       <div class="meta" style="color: #ed4245;">Error</div>
-      <div class="content">Failed to get AI response: ${error instanceof Error ? error.message : 'Unknown error'}. Please check your API key and try again.</div>
+      <div class="content">Failed to get AI response: ${error instanceof Error ? error.message : 'Unknown error'}</div>
     `;
     setStatus('AI error', true);
   }
