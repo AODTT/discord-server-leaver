@@ -1,0 +1,19 @@
+{
+  "name": "discord-memory-toolkit",
+  "version": "2.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:extension": "npm run dev -w @discord-memory/extension",
+    "dev:server": "npm run dev -w @discord-memory/server",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
+

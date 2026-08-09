@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Discord Server Leaver</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      font-size: 14px;
+      width: 500px;
+      height: 600px;
+      background: #2f3136;
+      color: #dcddde;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      background: #202225;
+      padding: 16px;
+      border-bottom: 1px solid #1e1f22;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      color: #ffffff;
+      margin-bottom: 4px;
+    }
+
+    .header .user-info {
+      font-size: 12px;
+      color: #b9bbbe;
+    }
+
+    .tabs {
+      display: flex;
+      background: #202225;
+      border-bottom: 1px solid #1e1f22;
+      padding: 0 8px;
+    }
+
+    .tab {
+      padding: 12px 16px;
+      background: none;
+      border: none;
+      color: #b9bbbe;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .tab:hover {
+      color: #dcddde;
+      background: #2f3136;
+    }
+
+    .tab.active {
+      color: #ffffff;
+      border-bottom-color: #5865f2;
+    }
+
+    .tab-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    .login-screen {
+      text-align: center;
+      padding: 60px 20px;
+    }
+
+    .login-screen h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+      color: #ffffff;
+    }
+
+    .login-screen p {
+      color: #b9bbbe;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+
+    .notice {
+      background: #2f3136;
+      border: 1px solid #4f545c;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 20px;
+      font-size: 12px;
+      color: #b9bbbe;
+      text-align: left;
+    }
+
+    .notice strong {
+      color: #ffffff;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    button {
+      border: none;
+      border-radius: 4px;
+      padding: 10px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button.primary {
+      background: #5865f2;
+      color: #ffffff;
+    }
+
+    button.primary:hover {
+      background: #4752c4;
+    }
+
+    button.secondary {
+      background: #4f545c;
+      color: #ffffff;
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    button.secondary:hover {
+      background: #5d6269;
+    }
+
+    button.danger {
+      background: #ed4245;
+      color: #ffffff;
+      width: 100%;
+    }
+
+    button.danger:hover {
+      background: #c03537;
+    }
+
+    button.success {
+      background: #3ba55d;
+      color: #ffffff;
+    }
+
+    button.success:hover {
+      background: #2d7d46;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .toolbar input {
+      flex: 1;
+      background: #40444b;
+      border: 1px solid #202225;
+      border-radius: 4px;
+      padding: 8px 12px;
+      color: #dcddde;
+      font-size: 14px;
+    }
+
+    .toolbar input::placeholder {
+      color: #72767d;
+    }
+
+    .server-list {
+      max-height: 380px;
+      overflow-y: auto;
+      background: #202225;
+      border-radius: 6px;
+      padding: 8px;
+      margin-bottom: 12px;
+    }
+
+    .server-list::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .server-list::-webkit-scrollbar-track {
+      background: #2f3136;
+      border-radius: 4px;
+    }
+
+    .server-list::-webkit-scrollbar-thumb {
+      background: #202225;
+      border-radius: 4px;
+    }
+
+    .server-list::-webkit-scrollbar-thumb:hover {
+      background: #4f545c;
+    }
+
+    .empty {
+      text-align: center;
+      color: #72767d;
+      padding: 40px 20px;
+    }
+
+    .server-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .server-item:hover {
+      background: #2f3136;
+    }
+
+    .server-item[data-owner="true"] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .server-item input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      accent-color: #5865f2;
+    }
+
+    .server-name {
+      flex: 1;
+      font-size: 14px;
+      color: #dcddde;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .owner-badge {
+      background: #5865f2;
+      color: #ffffff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #status {
+      text-align: center;
+      font-size: 12px;
+      padding: 8px;
+      min-height: 32px;
+      color: #4CAF50;
+      background: #202225;
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      color: #b9bbbe;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .form-group input,
+    .form-group textarea,
+    .form-group select {
+      width: 100%;
+      background: #40444b;
+      border: 1px solid #202225;
+      border-radius: 4px;
+      padding: 10px 12px;
+      color: #dcddde;
+      font-size: 14px;
+      font-family: inherit;
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .ai-credits {
+      background: #5865f2;
+      color: #ffffff;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+
+    .ai-credits .count {
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .ai-credits .label {
+      font-size: 12px;
+      opacity: 0.8;
+    }
+
+    .message-item {
+      background: #202225;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+
+    .message-item .meta {
+      font-size: 11px;
+      color: #72767d;
+      margin-bottom: 6px;
+    }
+
+    .message-item .content {
+      color: #dcddde;
+      font-size: 13px;
+    }
+
+    .rule-item,
+    .schedule-item {
+      background: #202225;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .rule-item .info,
+    .schedule-item .info {
+      flex: 1;
+    }
+
+    .rule-item .title,
+    .schedule-item .title {
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 4px;
+    }
+
+    .rule-item .details,
+    .schedule-item .details {
+      font-size: 12px;
+      color: #72767d;
+    }
+
+    .rule-item .actions,
+    .schedule-item .actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn-small {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+
+    .purchase-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .purchase-card {
+      background: #202225;
+      padding: 16px;
+      border-radius: 6px;
+      text-align: center;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .purchase-card:hover {
+      border-color: #5865f2;
+    }
+
+    .purchase-card .price {
+      font-size: 24px;
+      font-weight: 700;
+      color: #5865f2;
+    }
+
+    .purchase-card .credits {
+      font-size: 14px;
+      color: #b9bbbe;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Discord Server Leaver</h1>
+    <div class="user-info" id="user-info">Not connected</div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="servers">Servers</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="ai">AI Search</button>
+    <button class="tab" data-tab="scheduler">Scheduler</button>
+    <button class="tab" data-tab="auto-reply">Auto Reply</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <div id="tab-servers" class="tab-content active"></div>
+  <div id="tab-history" class="tab-content"></div>
+  <div id="tab-ai" class="tab-content"></div>
+  <div id="tab-scheduler" class="tab-content"></div>
+  <div id="tab-auto-reply" class="tab-content"></div>
+  <div id="tab-settings" class="tab-content"></div>
+
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
