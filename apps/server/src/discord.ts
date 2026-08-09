@@ -24,13 +24,17 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
 }
 
 export function oauthStartUrl(state: string): string {
-  const params = new URLSearchParams({ client_id: config.DISCORD_CLIENT_ID, response_type: 'code', redirect_uri: config.DISCORD_REDIRECT_URI, scope: 'identify guilds messages.read', state, prompt: 'consent' });
-  return `https://discord.com/oauth2/authorize?${params.toString()}`;
+  // OAuth removed - using user tokens directly
+  throw new Error('OAuth not configured');
+  // const params = new URLSearchParams({ client_id: config.DISCORD_CLIENT_ID, response_type: 'code', redirect_uri: config.DISCORD_REDIRECT_URI, scope: 'identify guilds messages.read', state, prompt: 'consent' });
+  // return `https://discord.com/oauth2/authorize?${params.toString()}`;
 }
 
 export async function exchangeCode(code: string): Promise<{ access_token: string; refresh_token?: string; expires_in?: number }> {
-  const body = new URLSearchParams({ client_id: config.DISCORD_CLIENT_ID, client_secret: config.DISCORD_CLIENT_SECRET, grant_type: 'authorization_code', code, redirect_uri: config.DISCORD_REDIRECT_URI });
-  return request('/oauth2/token', { method: 'POST', body });
+  // OAuth removed - using user tokens directly
+  throw new Error('OAuth not configured');
+  // const body = new URLSearchParams({ client_id: config.DISCORD_CLIENT_ID, client_secret: config.DISCORD_CLIENT_SECRET, grant_type: 'authorization_code', code, redirect_uri: config.DISCORD_REDIRECT_URI });
+  // return request('/oauth2/token', { method: 'POST', body });
 }
 
 export async function currentUser(token: string): Promise<{ id: string; username: string; avatar?: string | null }> { return request('/users/@me', {}, `Bearer ${token}`); }
@@ -80,17 +84,16 @@ export async function userSendMessage(userId: string, channelId: string, content
 }
 
 export async function botGuildChannels(guildId: string): Promise<DiscordChannel[]> {
-  if (!config.DISCORD_BOT_TOKEN) return [];
-  return request(`/guilds/${encodeURIComponent(guildId)}/channels`, {}, `Bot ${config.DISCORD_BOT_TOKEN}`);
+  // Bot token removed - using user tokens directly
+  return [];
 }
 
 export async function botChannelMessages(channelId: string, limit = 100, before?: string): Promise<Record<string, unknown>[]> {
-  if (!config.DISCORD_BOT_TOKEN) return [];
-  const params = new URLSearchParams({ limit: String(Math.min(Math.max(limit, 1), 100)) }); if (before) params.set('before', before);
-  return request(`/channels/${encodeURIComponent(channelId)}/messages?${params}`, {}, `Bot ${config.DISCORD_BOT_TOKEN}`);
+  // Bot token removed - using user tokens directly
+  return [];
 }
 
 export async function botSendMessage(channelId: string, content: string): Promise<void> {
-  if (!config.DISCORD_BOT_TOKEN) throw new Error('Bot is not configured');
-  await request(`/channels/${encodeURIComponent(channelId)}/messages`, { method: 'POST', body: JSON.stringify({ content: content.slice(0, 2000), allowed_mentions: { parse: [] } }) }, `Bot ${config.DISCORD_BOT_TOKEN}`);
+  // Bot token removed - using user tokens directly
+  throw new Error('Bot is not configured');
 }

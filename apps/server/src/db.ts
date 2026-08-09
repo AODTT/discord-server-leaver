@@ -18,6 +18,8 @@ const memory = {
   deliveryEvents: new Map<string, Record<string, unknown>>(),
   creditEvents: new Map<string, Record<string, unknown>>(),
   guildSettings: new Map<string, Record<string, unknown>>(),
+  apiKeys: new Map<string, Record<string, unknown>>(),
+  aiConversations: new Map<string, Record<string, unknown>>(),
 };
 
 export async function getDb(): Promise<Db | undefined> {
@@ -44,6 +46,10 @@ async function ensureIndexes(db: Db): Promise<void> {
     db.collection('auto_reply_events').createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 }),
     db.collection('delivery_events').createIndex({ scheduleId: 1, createdAt: -1 }),
     db.collection('credit_events').createIndex({ checkoutSessionId: 1 }, { unique: true, sparse: true }),
+    db.collection('api_keys').createIndex({ key: 1 }, { unique: true }),
+    db.collection('api_keys').createIndex({ userId: 1, active: 1 }),
+    db.collection('ai_conversations').createIndex({ userId: 1, timestamp: -1 }),
+    db.collection('messages').createIndex({ content: 'text', authorName: 'text' }),
   ]);
 }
 
@@ -63,6 +69,8 @@ export type Collections = {
   guildSettings: Collection<AnyDoc>;
   autoReplyEvents: Collection<AnyDoc>;
   deliveryEvents: Collection<AnyDoc>;
+  apiKeys: Collection<AnyDoc>;
+  aiConversations: Collection<AnyDoc>;
 };
 
 export async function collections(): Promise<Collections | undefined> {
@@ -80,5 +88,7 @@ export async function collections(): Promise<Collections | undefined> {
     guildSettings: db.collection<AnyDoc>('guild_settings'),
     autoReplyEvents: db.collection<AnyDoc>('auto_reply_events'),
     deliveryEvents: db.collection<AnyDoc>('delivery_events'),
+    apiKeys: db.collection<AnyDoc>('api_keys'),
+    aiConversations: db.collection<AnyDoc>('ai_conversations'),
   };
 }

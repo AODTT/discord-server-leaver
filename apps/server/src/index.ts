@@ -13,6 +13,9 @@ import { askHistory, indexEmbeddings } from './ai.js';
 import { normalizeImportedMessages } from './importer.js';
 import { countMessageRecords, createDocument, deleteDocument, deleteUserData, listDocuments, saveMessages, searchMessageRecords, updateDocument, getUser, updateUserCredits } from './repository.js';
 import { startBotWorker } from './bot-worker.js';
+import { createApiKey, validateApiKey, consumeCredit, getUserApiKeys, deactivateApiKey } from './api-keys.js';
+import { createCustomDonation, createApiKeyPurchase, handleWebhook as handleStripeWebhook } from './stripe.js';
+import { chatWithHistory, searchDiscordMessages, analyzeChannel } from './ai-chat.js';
 
 const app = express();
 const upload = multer({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
@@ -44,11 +47,7 @@ app.use(express.json({ limit: '12mb' }));
 app.get('/config/public', (_request, response) => response.json(publicConfig));
 
 app.get('/auth/discord/start', (request, response) => {
-  if (!config.DISCORD_CLIENT_ID || !config.DISCORD_CLIENT_SECRET) { response.status(503).json({ error: 'Discord OAuth is not configured' }); return; }
-  const requested = typeof request.query.return_to === 'string' ? request.query.return_to : config.APP_ORIGIN;
-  const returnTo = isAllowedReturnTo(requested) ? requested : config.APP_ORIGIN;
-  const state = crypto.randomBytes(24).toString('base64url'); oauthStates.set(state, { returnTo, expiresAt: Date.now() + 10 * 60 * 1000 });
-  response.redirect(discordOauthStartUrl(state));
+  response.status(503).json({ error: 'Discord OAuth is not configured - using user tokens directly' });
 });
 
 app.get('/auth/discord/callback', async (request, response) => {
@@ -122,10 +121,216 @@ app.delete('/auto-replies/:id', requireAuth, async (request: AuthenticatedReques
 app.get('/guild-settings/:guildId', requireAuth, async (request: AuthenticatedRequest, response) => { const c = await collections(); const query = { guildId: request.params.guildId, ownerUserId: request.user!.discordId }; const settings = c ? await c.guildSettings.findOne(query) : memoryStore().guildSettings.get(`${request.user!.discordId}:${request.params.guildId}`); response.json({ settings: settings ?? { guildId: request.params.guildId, indexingEnabled: false, indexedChannelIds: [] } }); });
 app.put('/guild-settings/:guildId', requireAuth, async (request: AuthenticatedRequest, response) => { const guildId = String(request.params.guildId); const body = z.object({ indexingEnabled: z.boolean(), indexedChannelIds: z.array(z.string().regex(/^\d+$/)).max(100), disclosureText: z.string().max(500).default('This server has opted in to message indexing by Discord Memory Toolkit.'), optedOutUserIds: z.array(z.string().regex(/^\d+$/)).max(10000).default([]) }).safeParse(request.body); if (!body.success) { response.status(400).json({ error: 'Invalid server settings' }); return; } if (!(await userCanManageGuild(request.user!.discordId, guildId))) { response.status(403).json({ error: 'Manage Server permission is required' }); return; } const c = await collections(); const doc = { guildId, ownerUserId: request.user!.discordId, ...body.data, updatedAt: new Date() }; if (c) await c.guildSettings.updateOne({ guildId, ownerUserId: request.user!.discordId }, { $set: doc }, { upsert: true }); else memoryStore().guildSettings.set(`${request.user!.discordId}:${guildId}`, doc); response.json({ settings: doc }); });
 
-app.post('/billing/checkout', requireAuth, async (request: AuthenticatedRequest, response: Response) => { if (!stripe) { response.status(503).json({ error: 'Billing is not configured' }); return; } const body = z.object({ pack: z.enum(['50', '120', '300']) }).safeParse(request.body); if (!body.success) { response.status(400).json({ error: 'Unknown credit pack' }); return; } const price = ({ '50': config.STRIPE_PRICE_50, '120': config.STRIPE_PRICE_120, '300': config.STRIPE_PRICE_300 } as const)[body.data.pack]; if (!price) { response.status(503).json({ error: 'This pack is not configured' }); return; } const session = await stripe.checkout.sessions.create({ mode: 'payment', line_items: [{ price, quantity: 1 }], success_url: `${config.APP_ORIGIN}/billing/success`, cancel_url: `${config.APP_ORIGIN}/billing/cancelled`, client_reference_id: request.user!.discordId, metadata: { userId: request.user!.discordId, credits: body.data.pack } }); response.json({ url: session.url }); });
+app.post('/billing/checkout', requireAuth, async (request: AuthenticatedRequest, response: Response) => {
+  response.status(503).json({ error: 'Old billing system removed - use /api/donate or /api/purchase-key instead' });
+});
 
 app.get('/data/export', requireAuth, async (request: AuthenticatedRequest, response: Response) => { const userId = request.user!.discordId; const [messages, memories, schedules, autoReplies] = await Promise.all([searchMessageRecords(userId, {}, 100_000), listDocuments('memories', userId), listDocuments('schedules', userId), listDocuments('autoReplies', userId)]); response.setHeader('Content-Disposition', 'attachment; filename=discord-memory-export.json'); response.json({ exportedAt: new Date().toISOString(), messages: messages.map(publicMessage), memories, schedules, autoReplies }); });
 app.delete('/data/all', requireAuth, async (request: AuthenticatedRequest, response: Response) => { await deleteUserData(request.user!.discordId); response.json({ ok: true }); });
+
+// API Key middleware
+async function requireApiKey(request: express.Request, response: express.Response, next: express.NextFunction) {
+  const authHeader = request.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    response.status(401).json({ error: 'API key required' });
+    return;
+  }
+  const apiKey = authHeader.slice(7);
+  const key = await validateApiKey(apiKey);
+  if (!key) {
+    response.status(401).json({ error: 'Invalid or expired API key' });
+    return;
+  }
+  (request as any).apiKey = key;
+  next();
+}
+
+// Stripe donation endpoint
+app.post('/api/donate', async (request, response) => {
+  const body = z.object({
+    amount: z.number().min(config.CUSTOM_PURCHASE_MIN_USD).max(config.CUSTOM_PURCHASE_MAX_USD),
+    email: z.string().email()
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid donation amount or email' });
+    return;
+  }
+
+  try {
+    const checkoutUrl = await createCustomDonation(body.data.amount, body.data.email);
+    response.json({ url: checkoutUrl });
+  } catch (error) {
+    console.error('Donation checkout error:', error);
+    response.status(500).json({ error: 'Failed to create checkout session' });
+  }
+});
+
+// API key purchase endpoint
+app.post('/api/purchase-key', async (request, response) => {
+  const body = z.object({
+    credits: z.number().int().min(100).max(100000),
+    email: z.string().email(),
+    userId: z.string().min(1)
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid purchase request' });
+    return;
+  }
+
+  try {
+    const priceUsd = body.data.credits / 10; // $0.10 per credit before discount
+    const checkoutUrl = await createApiKeyPurchase(
+      body.data.userId,
+      body.data.email,
+      body.data.credits,
+      priceUsd
+    );
+    response.json({ url: checkoutUrl });
+  } catch (error) {
+    console.error('API key purchase error:', error);
+    response.status(500).json({ error: 'Failed to create checkout session' });
+  }
+});
+
+// API key management
+app.get('/api/keys', requireAuth, async (request: AuthenticatedRequest, response) => {
+  try {
+    const keys = await getUserApiKeys(request.user!.discordId);
+    response.json({ keys });
+  } catch (error) {
+    console.error('List API keys error:', error);
+    response.status(500).json({ error: 'Failed to retrieve API keys' });
+  }
+});
+
+app.post('/api/keys', requireAuth, async (request: AuthenticatedRequest, response) => {
+  const body = z.object({
+    name: z.string().min(1).max(100),
+    credits: z.number().int().min(1).max(1000000)
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid key creation request' });
+    return;
+  }
+
+  try {
+    const key = await createApiKey(request.user!.discordId, body.data.name, body.data.credits);
+    response.json({ key });
+  } catch (error) {
+    console.error('Create API key error:', error);
+    response.status(500).json({ error: 'Failed to create API key' });
+  }
+});
+
+app.delete('/api/keys/:key', requireAuth, async (request: AuthenticatedRequest, response) => {
+  const key = request.params.key;
+  if (!key) {
+    response.status(400).json({ error: 'API key parameter required' });
+    return;
+  }
+
+  try {
+    const success = await deactivateApiKey(key, request.user!.discordId);
+    if (!success) {
+      response.status(404).json({ error: 'API key not found' });
+      return;
+    }
+    response.json({ ok: true });
+  } catch (error) {
+    console.error('Deactivate API key error:', error);
+    response.status(500).json({ error: 'Failed to deactivate API key' });
+  }
+});
+
+// AI chat endpoints
+app.post('/api/chat', requireApiKey, async (request, response) => {
+  const body = z.object({
+    message: z.string().min(1).max(10000)
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid chat request' });
+    return;
+  }
+
+  const apiKey = (request as any).apiKey;
+  const consumed = await consumeCredit(apiKey.key, 1);
+  if (!consumed) {
+    response.status(402).json({ error: 'Insufficient credits' });
+    return;
+  }
+
+  try {
+    const reply = await chatWithHistory(apiKey.userId, body.data.message);
+    response.json({ reply, creditsRemaining: apiKey.credits - 1 });
+  } catch (error) {
+    console.error('AI chat error:', error);
+    response.status(500).json({ error: 'Failed to process chat request' });
+  }
+});
+
+app.post('/api/search-messages', requireApiKey, async (request, response) => {
+  const body = z.object({
+    query: z.string().min(1).max(500),
+    serverId: z.string().optional(),
+    channelId: z.string().optional(),
+    authorId: z.string().optional()
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid search request' });
+    return;
+  }
+
+  const apiKey = (request as any).apiKey;
+  const consumed = await consumeCredit(apiKey.key, 1);
+  if (!consumed) {
+    response.status(402).json({ error: 'Insufficient credits' });
+    return;
+  }
+
+  try {
+    const messages = await searchDiscordMessages(apiKey.userId, body.data.query, {
+      serverId: body.data.serverId,
+      channelId: body.data.channelId,
+      authorId: body.data.authorId
+    });
+    response.json({ messages, creditsRemaining: apiKey.credits - 1 });
+  } catch (error) {
+    console.error('Search messages error:', error);
+    response.status(500).json({ error: 'Failed to search messages' });
+  }
+});
+
+app.post('/api/analyze-channel', requireApiKey, async (request, response) => {
+  const body = z.object({
+    channelId: z.string(),
+    analysisType: z.enum(['summary', 'value', 'math'])
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid analysis request' });
+    return;
+  }
+
+  const apiKey = (request as any).apiKey;
+  const consumed = await consumeCredit(apiKey.key, 2); // Analysis costs 2 credits
+  if (!consumed) {
+    response.status(402).json({ error: 'Insufficient credits' });
+    return;
+  }
+
+  try {
+    const analysis = await analyzeChannel(apiKey.userId, body.data.channelId, body.data.analysisType);
+    response.json({ analysis, creditsRemaining: apiKey.credits - 2 });
+  } catch (error) {
+    console.error('Analyze channel error:', error);
+    response.status(500).json({ error: 'Failed to analyze channel' });
+  }
+});
 
 app.use((_request, response) => response.status(404).json({ error: 'Not found' }));
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => { console.error(error instanceof Error ? error.message : error); response.status(500).json({ error: 'Internal server error' }); });
