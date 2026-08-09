@@ -4,14 +4,14 @@ import { getDiscordToken, fetchGuilds, leaveGuild, type DiscordGuild } from './d
 let guilds: DiscordGuild[] = [];
 let token: string | null = null;
 let currentTab = 'servers';
-let backendToken: string | null = null;
-let userInfo: any = null;
+let apiKey: string | null = null;
+let apiKeyInfo: any = null;
 
-const API_BASE = 'https://stream-dream.shop';
+const API_BASE = 'https://discord-server-leaver-production.up.railway.app';
 
 // Elements
 const statusEl = document.querySelector<HTMLDivElement>('#status')!;
-const userInfoEl = document.querySelector<HTMLDivElement>('#user-info')!;
+const userInfoEl = document.querySelector<HTMLDivElement>('#user-info')!;;
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
@@ -252,31 +252,92 @@ async function leaveSelected(keepMode: boolean): Promise<void> {
 
 function renderHistoryTab(): void {
   const container = document.querySelector('#tab-history')!;
+
+  if (!apiKey) {
+    container.innerHTML = `
+      <div class="login-screen">
+        <h3>API Key Required</h3>
+        <p>Enter your API key from stream-dream.shop (80% off promo!)</p>
+        <div class="form-group">
+          <input type="text" id="api-key-input" placeholder="sk-..." style="width: 100%; margin-bottom: 12px;">
+          <button id="save-api-key" class="primary">Save API Key</button>
+        </div>
+        <div class="notice">
+          <strong>Get your API key:</strong><br>
+          Visit <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a> and purchase credits with 80% discount.
+        </div>
+      </div>
+    `;
+    container.querySelector('#save-api-key')?.addEventListener('click', saveApiKey);
+    return;
+  }
+
   container.innerHTML = `
+    <div class="ai-credits">
+      <div class="count">${apiKeyInfo?.credits || 0} Credits</div>
+      <div class="label">API Key: ${apiKey.substring(0, 10)}...</div>
+    </div>
     <div class="toolbar">
       <input id="search-query" type="text" placeholder="Search your messages...">
       <button id="search-btn" class="primary">Search</button>
     </div>
     <div class="form-group">
-      <label>Date Range</label>
-      <select id="date-range">
-        <option value="7">Last 7 days</option>
-        <option value="30">Last 30 days</option>
-        <option value="90">Last 90 days</option>
-        <option value="365">Last year</option>
-        <option value="all">All time</option>
-      </select>
+      <label>Filters (optional)</label>
+      <input id="filter-server" type="text" placeholder="Server ID" style="margin-bottom: 8px;">
+      <input id="filter-channel" type="text" placeholder="Channel ID" style="margin-bottom: 8px;">
+      <input id="filter-author" type="text" placeholder="Author ID">
     </div>
     <div id="message-results" class="server-list">
-      <div class="empty">Enter a search query to find messages.</div>
+      <div class="empty">Enter a search query to find messages from your Discord history.</div>
     </div>
   `;
 
   container.querySelector('#search-btn')?.addEventListener('click', searchMessages);
 }
 
+async function saveApiKey(): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>('#api-key-input');
+  const key = input?.value.trim();
+
+  if (!key || !key.startsWith('sk-')) {
+    setStatus('Invalid API key format', true);
+    return;
+  }
+
+  setStatus('Validating API key...');
+
+  try {
+    // Test the API key
+    const response = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`
+      },
+      body: JSON.stringify({ message: 'test' })
+    });
+
+    if (!response.ok) {
+      setStatus('Invalid API key', true);
+      return;
+    }
+
+    const data = await response.json();
+    apiKey = key;
+    apiKeyInfo = { credits: data.creditsRemaining || 0 };
+    await chrome.storage.local.set({ apiKey });
+    setStatus('API key saved!');
+    renderTab(currentTab);
+  } catch (error) {
+    setStatus('Failed to validate API key', true);
+  }
+}
+
 async function searchMessages(): Promise<void> {
   const query = (document.querySelector('#search-query') as HTMLInputElement)?.value;
+  const serverId = (document.querySelector('#filter-server') as HTMLInputElement)?.value || undefined;
+  const channelId = (document.querySelector('#filter-channel') as HTMLInputElement)?.value || undefined;
+  const authorId = (document.querySelector('#filter-author') as HTMLInputElement)?.value || undefined;
   const resultsEl = document.querySelector('#message-results')!;
 
   if (!query) {
@@ -284,14 +345,55 @@ async function searchMessages(): Promise<void> {
     return;
   }
 
+  if (!apiKey) {
+    setStatus('API key required', true);
+    return;
+  }
+
   setStatus('Searching messages...');
   resultsEl.innerHTML = '<div class="empty">Searching...</div>';
 
-  // This would integrate with backend API
-  setTimeout(() => {
-    resultsEl.innerHTML = '<div class="empty">Feature coming soon - requires backend integration</div>';
-    setStatus('Search complete');
-  }, 1000);
+  try {
+    const response = await fetch(`${API_BASE}/api/search-messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        query,
+        serverId,
+        channelId,
+        authorId
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error('Search failed');
+    }
+
+    const data = await response.json();
+    apiKeyInfo = { credits: data.creditsRemaining || 0 };
+
+    if (data.messages.length === 0) {
+      resultsEl.innerHTML = '<div class="empty">No messages found.</div>';
+      setStatus('No results');
+      return;
+    }
+
+    resultsEl.innerHTML = data.messages.map((msg: any) => `
+      <div class="message-item">
+        <div class="meta">${escapeHtml(msg.author || 'Unknown')} • ${new Date(msg.timestamp).toLocaleString()}</div>
+        <div class="content">${escapeHtml(msg.content)}</div>
+        <div class="meta">${escapeHtml(msg.server || 'Unknown Server')} / ${escapeHtml(msg.channel || 'Unknown Channel')}</div>
+      </div>
+    `).join('');
+
+    setStatus(`Found ${data.messages.length} messages. ${data.creditsRemaining} credits remaining.`);
+  } catch (error) {
+    resultsEl.innerHTML = '<div class="empty">Search failed. Please try again.</div>';
+    setStatus('Search error', true);
+  }
 }
 
 // ============================================================================
@@ -301,77 +403,136 @@ async function searchMessages(): Promise<void> {
 function renderAITab(): void {
   const container = document.querySelector('#tab-ai')!;
 
-  const credits = userInfo?.aiCredits || 0;
-  const freeQuestions = userInfo?.freeQuestionsRemaining || 2;
+  if (!apiKey) {
+    container.innerHTML = `
+      <div class="login-screen">
+        <h3>API Key Required</h3>
+        <p>Enter your API key from stream-dream.shop (80% off promo!)</p>
+        <div class="form-group">
+          <input type="text" id="api-key-input-ai" placeholder="sk-..." style="width: 100%; margin-bottom: 12px;">
+          <button id="save-api-key-ai" class="primary">Save API Key</button>
+        </div>
+        <div class="notice">
+          <strong>Get your API key:</strong><br>
+          Visit <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a> and purchase credits with 80% discount.
+        </div>
+      </div>
+    `;
+    container.querySelector('#save-api-key-ai')?.addEventListener('click', saveApiKey);
+    return;
+  }
+
+  const credits = apiKeyInfo?.credits || 0;
 
   container.innerHTML = `
     <div class="ai-credits">
       <div class="count">${credits} AI Credits</div>
-      <div class="label">${freeQuestions} free questions remaining</div>
+      <div class="label">Chat with your Discord history</div>
+    </div>
+
+    <div id="ai-chat-history" style="max-height: 300px; overflow-y: auto; margin-bottom: 16px; padding: 12px; background: #2f3136; border-radius: 8px;">
+      <div class="empty" style="color: #72767d; text-align: center;">Start a conversation with your AI buddy!</div>
     </div>
 
     <div class="form-group">
-      <label>Ask Your Discord History</label>
-      <textarea id="ai-question" placeholder="e.g., Find someone who wants to farm with me"></textarea>
+      <textarea id="ai-question" placeholder="Ask me anything about your Discord history..."></textarea>
     </div>
 
-    <button id="ask-ai" class="primary" style="width: 100%">Ask AI</button>
+    <button id="ask-ai" class="primary" style="width: 100%">Send Message</button>
 
-    <div id="ai-response" style="margin-top: 16px;"></div>
-
-    ${credits === 0 && freeQuestions === 0 ? `
-      <div class="purchase-options" style="margin-top: 20px;">
-        <div class="purchase-card" data-pack="50">
-          <div class="price">$5</div>
-          <div class="credits">50 AI Credits</div>
-        </div>
-        <div class="purchase-card" data-pack="120">
-          <div class="price">$10</div>
-          <div class="credits">120 AI Credits</div>
-        </div>
+    ${credits === 0 ? `
+      <div class="notice" style="margin-top: 16px; background: #ff4444; color: #fff;">
+        <strong>Out of credits!</strong> Visit <a href="https://stream-dream.shop" target="_blank" style="color: #fff; text-decoration: underline;">stream-dream.shop</a> to purchase more with 80% discount.
       </div>
     ` : ''}
   `;
 
   container.querySelector('#ask-ai')?.addEventListener('click', askAI);
-  container.querySelectorAll('.purchase-card').forEach(card => {
-    card.addEventListener('click', () => {
-      const pack = card.getAttribute('data-pack');
-      if (pack) purchaseCredits(pack);
-    });
-  });
 }
 
 async function askAI(): Promise<void> {
   const question = (document.querySelector('#ai-question') as HTMLTextAreaElement)?.value;
-  const responseEl = document.querySelector('#ai-response')!;
+  const chatHistory = document.querySelector('#ai-chat-history')!;
+  const textarea = document.querySelector('#ai-question') as HTMLTextAreaElement;
 
   if (!question) {
     setStatus('Enter a question', true);
     return;
   }
 
-  setStatus('Asking AI...');
-  responseEl.innerHTML = '<div class="message-item"><div class="content">Thinking...</div></div>';
+  if (!apiKey) {
+    setStatus('API key required', true);
+    return;
+  }
 
-  // This would integrate with backend API
-  setTimeout(() => {
-    responseEl.innerHTML = `
-      <div class="message-item">
-        <div class="meta">AI Response</div>
-        <div class="content">Feature coming soon - requires backend integration with MongoDB and AI processing</div>
-      </div>
+  // Clear empty state if present
+  if (chatHistory.querySelector('.empty')) {
+    chatHistory.innerHTML = '';
+  }
+
+  // Add user message
+  const userMsg = document.createElement('div');
+  userMsg.className = 'message-item';
+  userMsg.innerHTML = `
+    <div class="meta" style="color: #5865f2;">You</div>
+    <div class="content">${escapeHtml(question)}</div>
+  `;
+  chatHistory.appendChild(userMsg);
+
+  // Add thinking indicator
+  const thinkingMsg = document.createElement('div');
+  thinkingMsg.className = 'message-item';
+  thinkingMsg.innerHTML = `
+    <div class="meta" style="color: #57f287;">AI Buddy</div>
+    <div class="content" style="color: #72767d;">Thinking...</div>
+  `;
+  chatHistory.appendChild(thinkingMsg);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+
+  textarea.value = '';
+  setStatus('Asking AI...');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ message: question })
+    });
+
+    if (!response.ok) {
+      throw new Error('AI request failed');
+    }
+
+    const data = await response.json();
+    apiKeyInfo = { credits: data.creditsRemaining || 0 };
+
+    // Replace thinking with actual response
+    thinkingMsg.innerHTML = `
+      <div class="meta" style="color: #57f287;">AI Buddy</div>
+      <div class="content">${escapeHtml(data.reply)}</div>
     `;
-    setStatus('Response received');
-  }, 1000);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+
+    setStatus(`Response received. ${data.creditsRemaining} credits remaining.`);
+
+    // Update credits display
+    const creditsEl = document.querySelector('.ai-credits .count');
+    if (creditsEl) creditsEl.textContent = `${data.creditsRemaining} AI Credits`;
+  } catch (error) {
+    thinkingMsg.innerHTML = `
+      <div class="meta" style="color: #ed4245;">Error</div>
+      <div class="content">Failed to get AI response. Please try again.</div>
+    `;
+    setStatus('AI error', true);
+  }
 }
 
 async function purchaseCredits(pack: string): Promise<void> {
-  setStatus('Opening checkout...');
-  // This would integrate with Stripe checkout
-  setTimeout(() => {
-    setStatus('Feature coming soon', true);
-  }, 500);
+  setStatus('Redirecting to purchase page...');
+  chrome.tabs.create({ url: 'https://stream-dream.shop' });
 }
 
 // ============================================================================
@@ -526,47 +687,74 @@ function renderSettingsTab(): void {
   const container = document.querySelector('#tab-settings')!;
   container.innerHTML = `
     <div class="form-group">
+      <label>API Key Management</label>
+      ${apiKey ? `
+        <div style="padding: 12px; background: #2f3136; border-radius: 8px; margin-bottom: 12px;">
+          <div style="font-size: 12px; color: #72767d;">Current Key</div>
+          <div style="font-family: monospace; color: #fff; margin: 4px 0;">${apiKey.substring(0, 15)}...</div>
+          <div style="font-size: 12px; color: #57f287;">${apiKeyInfo?.credits || 0} credits remaining</div>
+        </div>
+        <button id="remove-api-key" class="danger">Remove API Key</button>
+      ` : `
+        <button id="add-api-key" class="primary">Add API Key</button>
+        <p style="font-size: 12px; color: #72767d; margin-top: 8px;">
+          Get your API key from <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a> with 80% discount!
+        </p>
+      `}
+    </div>
+
+    <div class="form-group">
       <label>Discord Connection</label>
       <button id="reconnect-discord" class="secondary">Reconnect Discord</button>
     </div>
 
     <div class="form-group">
-      <label>Cloud Sync</label>
-      <button id="enable-cloud" class="primary">${userInfo ? 'Cloud Enabled' : 'Enable Cloud'}</button>
+      <label>Support Development</label>
+      <button id="donate" class="success">❤️ Donate</button>
       <p style="font-size: 12px; color: #72767d; margin-top: 8px;">
-        Store your messages in the cloud for AI search across devices.
+        Support this project with a custom donation amount via Stripe.
       </p>
     </div>
 
     <div class="form-group">
-      <label>Privacy</label>
-      <button id="delete-data" class="danger">Delete All Cloud Data</button>
-    </div>
-
-    <div class="form-group">
-      <label>Support Development</label>
-      <button id="donate" class="success">❤️ Donate</button>
+      <label>Purchase API Credits</label>
+      <button id="buy-credits" class="primary">Buy Credits (80% OFF)</button>
+      <p style="font-size: 12px; color: #72767d; margin-top: 8px;">
+        Visit stream-dream.shop to purchase API credits with 80% promotional discount.
+      </p>
     </div>
 
     <div class="notice" style="margin-top: 20px;">
-      <strong>Version 2.0.0</strong>
+      <strong>Version 2.0.0</strong><br>
       Discord Server Leaver with AI Memory
     </div>
   `;
 
   container.querySelector('#reconnect-discord')?.addEventListener('click', detectToken);
-  container.querySelector('#delete-data')?.addEventListener('click', deleteCloudData);
+  container.querySelector('#remove-api-key')?.addEventListener('click', removeApiKey);
+  container.querySelector('#add-api-key')?.addEventListener('click', () => switchTab('ai'));
+  container.querySelector('#donate')?.addEventListener('click', openDonation);
+  container.querySelector('#buy-credits')?.addEventListener('click', openPurchase);
 }
 
-async function deleteCloudData(): Promise<void> {
-  const confirm = prompt('Type DELETE to confirm deleting all cloud data:');
-  if (confirm !== 'DELETE') return;
+async function removeApiKey(): Promise<void> {
+  const confirm = prompt('Remove API key? Type REMOVE to confirm:');
+  if (confirm !== 'REMOVE') return;
 
-  setStatus('Deleting cloud data...');
-  // This would integrate with backend API
-  setTimeout(() => {
-    setStatus('Cloud data deleted');
-  }, 500);
+  apiKey = null;
+  apiKeyInfo = null;
+  await chrome.storage.local.remove('apiKey');
+  setStatus('API key removed');
+  renderTab('settings');
+}
+
+async function openDonation(): Promise<void> {
+  // For now, just open the purchase page - in production, this would use /api/donate
+  chrome.tabs.create({ url: 'https://stream-dream.shop' });
+}
+
+async function openPurchase(): Promise<void> {
+  chrome.tabs.create({ url: 'https://stream-dream.shop' });
 }
 
 // ============================================================================
@@ -601,12 +789,37 @@ function renderTab(tabName: string): void {
 // ============================================================================
 
 async function init(): Promise<void> {
-  const stored = await chrome.storage.local.get(['discordToken', 'backendToken']);
+  const stored = await chrome.storage.local.get(['discordToken', 'apiKey']);
   token = stored.discordToken || null;
-  backendToken = stored.backendToken || null;
+  apiKey = stored.apiKey || null;
 
   if (token) {
     await loadGuilds();
+  }
+
+  if (apiKey) {
+    // Validate API key on startup
+    try {
+      const response = await fetch(`${API_BASE}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ message: 'ping' })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        apiKeyInfo = { credits: data.creditsRemaining || 0 };
+      } else {
+        // Invalid API key
+        apiKey = null;
+        await chrome.storage.local.remove('apiKey');
+      }
+    } catch (error) {
+      console.error('Failed to validate API key:', error);
+    }
   }
 
   renderTab(currentTab);
