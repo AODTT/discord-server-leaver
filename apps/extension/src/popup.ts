@@ -221,7 +221,7 @@ async function checkInactiveServers(): Promise<void> {
       try {
         // Get channels for this guild
         const channelsResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/channels`, {
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: { 'Authorization': token }
         });
 
         if (!channelsResponse.ok) continue;
@@ -235,7 +235,7 @@ async function checkInactiveServers(): Promise<void> {
         for (const channel of textChannels.slice(0, 3)) {
           try {
             const messagesResponse = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages?limit=1`, {
-              headers: { 'Authorization': `Bearer ${token}` }
+              headers: { 'Authorization': token }
             });
 
             if (!messagesResponse.ok) continue;

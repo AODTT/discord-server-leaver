@@ -33,7 +33,7 @@ export const discordTools: DiscordTool[] = [
     execute: async (params, token) => {
       const url = `https://discord.com/api/v10/channels/${params.channel_id}/messages?limit=${params.limit || 50}${params.before ? `&before=${params.before}` : ''}`;
       const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': token }
       });
       if (!response.ok) throw new Error(`Failed to fetch messages: ${response.status}`);
       return await response.json();
@@ -60,7 +60,7 @@ export const discordTools: DiscordTool[] = [
       const response = await fetch(`https://discord.com/api/v10/channels/${params.channel_id}/messages`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'Authorization': token,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ content: params.content })
@@ -78,7 +78,7 @@ export const discordTools: DiscordTool[] = [
     },
     execute: async (params, token) => {
       const response = await fetch('https://discord.com/api/v10/users/@me/guilds', {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': token }
       });
       if (!response.ok) throw new Error(`Failed to fetch guilds: ${response.status}`);
       return await response.json();
@@ -99,7 +99,7 @@ export const discordTools: DiscordTool[] = [
     },
     execute: async (params, token) => {
       const response = await fetch(`https://discord.com/api/v10/guilds/${params.guild_id}/channels`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': token }
       });
       if (!response.ok) throw new Error(`Failed to fetch channels: ${response.status}`);
       return await response.json();
@@ -138,7 +138,7 @@ export const discordTools: DiscordTool[] = [
       if (params.channel_id) searchParams.set('channel_id', params.channel_id);
 
       const response = await fetch(`https://discord.com/api/v10/guilds/${params.guild_id}/messages/search?${searchParams}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': token }
       });
       if (!response.ok) throw new Error(`Failed to search messages: ${response.status}`);
       return await response.json();
@@ -159,7 +159,7 @@ export const discordTools: DiscordTool[] = [
     },
     execute: async (params, token) => {
       const response = await fetch(`https://discord.com/api/v10/users/${params.user_id}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': token }
       });
       if (!response.ok) throw new Error(`Failed to fetch user: ${response.status}`);
       return await response.json();
@@ -190,7 +190,7 @@ export const discordTools: DiscordTool[] = [
       const emoji = encodeURIComponent(params.emoji);
       const response = await fetch(`https://discord.com/api/v10/channels/${params.channel_id}/messages/${params.message_id}/reactions/${emoji}/@me`, {
         method: 'PUT',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': token }
       });
       if (!response.ok) throw new Error(`Failed to add reaction: ${response.status}`);
       return { success: true };
@@ -213,7 +213,7 @@ export const discordTools: DiscordTool[] = [
       const response = await fetch('https://discord.com/api/v10/users/@me/channels', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'Authorization': token,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ recipient_id: params.recipient_id })
