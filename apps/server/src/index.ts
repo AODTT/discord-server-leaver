@@ -332,6 +332,105 @@ app.post('/api/analyze-channel', requireApiKey, async (request, response) => {
   }
 });
 
+// Discord history endpoint (no payment required - uses user's Discord token)
+app.post('/api/discord/messages', async (request, response) => {
+  const body = z.object({
+    discordToken: z.string(),
+    channelId: z.string(),
+    limit: z.number().int().min(1).max(100).default(50),
+    before: z.string().optional()
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid request' });
+    return;
+  }
+
+  try {
+    const { userChannelMessages } = await import('./discord.js');
+
+    // Create a temporary user ID from the token (for caching purposes)
+    const tempUserId = Buffer.from(body.data.discordToken.substring(0, 20)).toString('base64');
+
+    const messages = await userChannelMessages(
+      tempUserId,
+      body.data.channelId,
+      body.data.limit,
+      body.data.before
+    );
+
+    response.json({ messages });
+  } catch (error) {
+    console.error('Fetch Discord messages error:', error);
+    response.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// Get user's Discord guilds (no payment required)
+app.post('/api/discord/guilds', async (request, response) => {
+  const body = z.object({
+    discordToken: z.string()
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid request' });
+    return;
+  }
+
+  try {
+    const { currentUser } = await import('./discord.js');
+    const user = await currentUser(body.data.discordToken);
+
+    // Fetch guilds using Discord API directly
+    const guildsResponse = await fetch('https://discord.com/api/v10/users/@me/guilds', {
+      headers: {
+        'Authorization': `Bearer ${body.data.discordToken}`
+      }
+    });
+
+    if (!guildsResponse.ok) {
+      throw new Error('Failed to fetch guilds');
+    }
+
+    const guilds = await guildsResponse.json();
+    response.json({ guilds, user });
+  } catch (error) {
+    console.error('Fetch Discord guilds error:', error);
+    response.status(500).json({ error: 'Failed to fetch guilds' });
+  }
+});
+
+// Get channels for a guild (no payment required)
+app.post('/api/discord/channels', async (request, response) => {
+  const body = z.object({
+    discordToken: z.string(),
+    guildId: z.string()
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid request' });
+    return;
+  }
+
+  try {
+    const channelsResponse = await fetch(`https://discord.com/api/v10/guilds/${body.data.guildId}/channels`, {
+      headers: {
+        'Authorization': `Bearer ${body.data.discordToken}`
+      }
+    });
+
+    if (!channelsResponse.ok) {
+      throw new Error('Failed to fetch channels');
+    }
+
+    const channels = await channelsResponse.json();
+    response.json({ channels });
+  } catch (error) {
+    console.error('Fetch Discord channels error:', error);
+    response.status(500).json({ error: 'Failed to fetch channels' });
+  }
+});
+
 app.use((_request, response) => response.status(404).json({ error: 'Not found' }));
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => { console.error(error instanceof Error ? error.message : error); response.status(500).json({ error: 'Internal server error' }); });
 

@@ -253,147 +253,143 @@ async function leaveSelected(keepMode: boolean): Promise<void> {
 function renderHistoryTab(): void {
   const container = document.querySelector('#tab-history')!;
 
-  if (!apiKey) {
+  if (!token) {
     container.innerHTML = `
       <div class="login-screen">
-        <h3>API Key Required</h3>
-        <p>Enter your API key from stream-dream.shop (80% off promo!)</p>
-        <div class="form-group">
-          <input type="text" id="api-key-input" placeholder="sk-..." style="width: 100%; margin-bottom: 12px;">
-          <button id="save-api-key" class="primary">Save API Key</button>
-        </div>
-        <div class="notice">
-          <strong>Get your API key:</strong><br>
-          Visit <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a> and purchase credits with 80% discount.
-        </div>
+        <h3>Discord Token Required</h3>
+        <p>Connect your Discord account first to view message history.</p>
+        <button id="detect-token-history" class="primary">Detect Discord Token</button>
       </div>
     `;
-    container.querySelector('#save-api-key')?.addEventListener('click', saveApiKey);
+    container.querySelector('#detect-token-history')?.addEventListener('click', detectToken);
     return;
   }
 
   container.innerHTML = `
-    <div class="ai-credits">
-      <div class="count">${apiKeyInfo?.credits || 0} Credits</div>
-      <div class="label">API Key: ${apiKey.substring(0, 10)}...</div>
-    </div>
     <div class="toolbar">
-      <input id="search-query" type="text" placeholder="Search your messages...">
-      <button id="search-btn" class="primary">Search</button>
+      <select id="history-server" style="flex: 1; margin-right: 8px;">
+        <option value="">Select a server...</option>
+        ${guilds.map(g => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join('')}
+      </select>
+      <button id="load-channels" class="secondary">Load Channels</button>
     </div>
-    <div class="form-group">
-      <label>Filters (optional)</label>
-      <input id="filter-server" type="text" placeholder="Server ID" style="margin-bottom: 8px;">
-      <input id="filter-channel" type="text" placeholder="Channel ID" style="margin-bottom: 8px;">
-      <input id="filter-author" type="text" placeholder="Author ID">
+    <div class="form-group" id="channel-selector" style="display: none;">
+      <label>Channel</label>
+      <select id="history-channel">
+        <option value="">Select a channel...</option>
+      </select>
+      <button id="load-messages" class="primary" style="margin-top: 8px;">Load Messages</button>
     </div>
     <div id="message-results" class="server-list">
-      <div class="empty">Enter a search query to find messages from your Discord history.</div>
+      <div class="empty">Select a server and channel to view message history.</div>
     </div>
   `;
 
-  container.querySelector('#search-btn')?.addEventListener('click', searchMessages);
+  container.querySelector('#load-channels')?.addEventListener('click', loadChannels);
+  container.querySelector('#load-messages')?.addEventListener('click', loadMessages);
 }
 
-async function saveApiKey(): Promise<void> {
-  const input = document.querySelector<HTMLInputElement>('#api-key-input');
-  const key = input?.value.trim();
+async function loadChannels(): Promise<void> {
+  const serverSelect = document.querySelector<HTMLSelectElement>('#history-server');
+  const guildId = serverSelect?.value;
 
-  if (!key || !key.startsWith('sk-')) {
-    setStatus('Invalid API key format', true);
+  if (!guildId || !token) {
+    setStatus('Select a server first', true);
     return;
   }
 
-  setStatus('Validating API key...');
+  setStatus('Loading channels...');
 
   try {
-    // Test the API key
-    const response = await fetch(`${API_BASE}/api/chat`, {
+    const response = await fetch(`${API_BASE}/api/discord/channels`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${key}`
-      },
-      body: JSON.stringify({ message: 'test' })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ discordToken: token, guildId })
     });
 
     if (!response.ok) {
-      setStatus('Invalid API key', true);
-      return;
+      throw new Error('Failed to load channels');
     }
 
     const data = await response.json();
-    apiKey = key;
-    apiKeyInfo = { credits: data.creditsRemaining || 0 };
-    await chrome.storage.local.set({ apiKey });
-    setStatus('API key saved!');
-    renderTab(currentTab);
+    const textChannels = data.channels.filter((ch: any) => ch.type === 0); // Text channels only
+
+    const channelSelect = document.querySelector<HTMLSelectElement>('#history-channel');
+    if (channelSelect) {
+      channelSelect.innerHTML = '<option value="">Select a channel...</option>' +
+        textChannels.map((ch: any) => `<option value="${escapeHtml(ch.id)}">${escapeHtml(ch.name)}</option>`).join('');
+    }
+
+    const channelSelector = document.querySelector<HTMLElement>('#channel-selector');
+    if (channelSelector) channelSelector.style.display = 'block';
+
+    setStatus(`Loaded ${textChannels.length} channels`);
   } catch (error) {
-    setStatus('Failed to validate API key', true);
+    setStatus('Failed to load channels', true);
   }
 }
 
-async function searchMessages(): Promise<void> {
-  const query = (document.querySelector('#search-query') as HTMLInputElement)?.value;
-  const serverId = (document.querySelector('#filter-server') as HTMLInputElement)?.value || undefined;
-  const channelId = (document.querySelector('#filter-channel') as HTMLInputElement)?.value || undefined;
-  const authorId = (document.querySelector('#filter-author') as HTMLInputElement)?.value || undefined;
+async function loadMessages(): Promise<void> {
+  const channelSelect = document.querySelector<HTMLSelectElement>('#history-channel');
+  const channelId = channelSelect?.value;
   const resultsEl = document.querySelector('#message-results')!;
 
-  if (!query) {
-    setStatus('Enter a search term', true);
+  if (!channelId || !token) {
+    setStatus('Select a channel first', true);
     return;
   }
 
-  if (!apiKey) {
-    setStatus('API key required', true);
-    return;
-  }
-
-  setStatus('Searching messages...');
-  resultsEl.innerHTML = '<div class="empty">Searching...</div>';
+  setStatus('Loading messages...');
+  resultsEl.innerHTML = '<div class="empty">Loading...</div>';
 
   try {
-    const response = await fetch(`${API_BASE}/api/search-messages`, {
+    const response = await fetch(`${API_BASE}/api/discord/messages`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        query,
-        serverId,
-        channelId,
-        authorId
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ discordToken: token, channelId, limit: 50 })
     });
 
     if (!response.ok) {
-      throw new Error('Search failed');
+      throw new Error('Failed to load messages');
     }
 
     const data = await response.json();
-    apiKeyInfo = { credits: data.creditsRemaining || 0 };
 
     if (data.messages.length === 0) {
-      resultsEl.innerHTML = '<div class="empty">No messages found.</div>';
-      setStatus('No results');
+      resultsEl.innerHTML = '<div class="empty">No messages found in this channel.</div>';
+      setStatus('No messages');
       return;
     }
 
     resultsEl.innerHTML = data.messages.map((msg: any) => `
       <div class="message-item">
-        <div class="meta">${escapeHtml(msg.author || 'Unknown')} • ${new Date(msg.timestamp).toLocaleString()}</div>
-        <div class="content">${escapeHtml(msg.content)}</div>
-        <div class="meta">${escapeHtml(msg.server || 'Unknown Server')} / ${escapeHtml(msg.channel || 'Unknown Channel')}</div>
+        <div class="meta">${escapeHtml(msg.author?.username || 'Unknown')} • ${new Date(msg.timestamp).toLocaleString()}</div>
+        <div class="content">${escapeHtml(msg.content || '[No content]')}</div>
       </div>
     `).join('');
 
-    setStatus(`Found ${data.messages.length} messages. ${data.creditsRemaining} credits remaining.`);
+    setStatus(`Loaded ${data.messages.length} messages`);
   } catch (error) {
-    resultsEl.innerHTML = '<div class="empty">Search failed. Please try again.</div>';
-    setStatus('Search error', true);
+    resultsEl.innerHTML = '<div class="empty">Failed to load messages. Make sure you have permission to view this channel.</div>';
+    setStatus('Load error', true);
   }
+}
+
+async function saveApiKey(): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>('#api-key-input') ||
+                document.querySelector<HTMLInputElement>('#api-key-input-ai');
+  const key = input?.value.trim();
+
+  if (!key || !key.startsWith('lat_')) {
+    setStatus('Invalid API key format (should start with lat_)', true);
+    return;
+  }
+
+  apiKey = key;
+  apiKeyInfo = { credits: 999999 }; // Stream Dream uses different credit system
+  await chrome.storage.local.set({ apiKey });
+  setStatus('API key saved!');
+  renderTab(currentTab);
 }
 
 // ============================================================================
@@ -407,14 +403,14 @@ function renderAITab(): void {
     container.innerHTML = `
       <div class="login-screen">
         <h3>API Key Required</h3>
-        <p>Enter your API key from stream-dream.shop (80% off promo!)</p>
+        <p>Enter your Stream Dream API key to chat with AI about your Discord history.</p>
         <div class="form-group">
-          <input type="text" id="api-key-input-ai" placeholder="sk-..." style="width: 100%; margin-bottom: 12px;">
+          <input type="text" id="api-key-input-ai" placeholder="lat_live_..." style="width: 100%; margin-bottom: 12px;">
           <button id="save-api-key-ai" class="primary">Save API Key</button>
         </div>
         <div class="notice">
           <strong>Get your API key:</strong><br>
-          Visit <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a> and purchase credits with 80% discount.
+          Visit <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a> to get your API key.
         </div>
       </div>
     `;
@@ -422,12 +418,10 @@ function renderAITab(): void {
     return;
   }
 
-  const credits = apiKeyInfo?.credits || 0;
-
   container.innerHTML = `
     <div class="ai-credits">
-      <div class="count">${credits} AI Credits</div>
-      <div class="label">Chat with your Discord history</div>
+      <div class="count">Stream Dream AI</div>
+      <div class="label">Powered by gpt-5.6-sol</div>
     </div>
 
     <div id="ai-chat-history" style="max-height: 300px; overflow-y: auto; margin-bottom: 16px; padding: 12px; background: #2f3136; border-radius: 8px;">
@@ -440,11 +434,9 @@ function renderAITab(): void {
 
     <button id="ask-ai" class="primary" style="width: 100%">Send Message</button>
 
-    ${credits === 0 ? `
-      <div class="notice" style="margin-top: 16px; background: #ff4444; color: #fff;">
-        <strong>Out of credits!</strong> Visit <a href="https://stream-dream.shop" target="_blank" style="color: #fff; text-decoration: underline;">stream-dream.shop</a> to purchase more with 80% discount.
-      </div>
-    ` : ''}
+    <div class="notice" style="margin-top: 16px;">
+      <strong>Note:</strong> The AI has access to your Discord message history and can help you search, analyze, and understand your conversations.
+    </div>
   `;
 
   container.querySelector('#ask-ai')?.addEventListener('click', askAI);
@@ -507,7 +499,6 @@ async function askAI(): Promise<void> {
     }
 
     const data = await response.json();
-    apiKeyInfo = { credits: data.creditsRemaining || 0 };
 
     // Replace thinking with actual response
     thinkingMsg.innerHTML = `
@@ -516,15 +507,11 @@ async function askAI(): Promise<void> {
     `;
     chatHistory.scrollTop = chatHistory.scrollHeight;
 
-    setStatus(`Response received. ${data.creditsRemaining} credits remaining.`);
-
-    // Update credits display
-    const creditsEl = document.querySelector('.ai-credits .count');
-    if (creditsEl) creditsEl.textContent = `${data.creditsRemaining} AI Credits`;
+    setStatus('Response received');
   } catch (error) {
     thinkingMsg.innerHTML = `
       <div class="meta" style="color: #ed4245;">Error</div>
-      <div class="content">Failed to get AI response. Please try again.</div>
+      <div class="content">Failed to get AI response. Please check your API key and try again.</div>
     `;
     setStatus('AI error', true);
   }
@@ -687,18 +674,18 @@ function renderSettingsTab(): void {
   const container = document.querySelector('#tab-settings')!;
   container.innerHTML = `
     <div class="form-group">
-      <label>API Key Management</label>
+      <label>Stream Dream API Key</label>
       ${apiKey ? `
         <div style="padding: 12px; background: #2f3136; border-radius: 8px; margin-bottom: 12px;">
           <div style="font-size: 12px; color: #72767d;">Current Key</div>
-          <div style="font-family: monospace; color: #fff; margin: 4px 0;">${apiKey.substring(0, 15)}...</div>
-          <div style="font-size: 12px; color: #57f287;">${apiKeyInfo?.credits || 0} credits remaining</div>
+          <div style="font-family: monospace; color: #fff; margin: 4px 0;">${apiKey.substring(0, 20)}...</div>
+          <div style="font-size: 12px; color: #57f287;">Connected to Stream Dream</div>
         </div>
         <button id="remove-api-key" class="danger">Remove API Key</button>
       ` : `
         <button id="add-api-key" class="primary">Add API Key</button>
         <p style="font-size: 12px; color: #72767d; margin-top: 8px;">
-          Get your API key from <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a> with 80% discount!
+          Get your API key from <a href="https://stream-dream.shop" target="_blank">stream-dream.shop</a>
         </p>
       `}
     </div>
@@ -708,33 +695,16 @@ function renderSettingsTab(): void {
       <button id="reconnect-discord" class="secondary">Reconnect Discord</button>
     </div>
 
-    <div class="form-group">
-      <label>Support Development</label>
-      <button id="donate" class="success">❤️ Donate</button>
-      <p style="font-size: 12px; color: #72767d; margin-top: 8px;">
-        Support this project with a custom donation amount via Stripe.
-      </p>
-    </div>
-
-    <div class="form-group">
-      <label>Purchase API Credits</label>
-      <button id="buy-credits" class="primary">Buy Credits (80% OFF)</button>
-      <p style="font-size: 12px; color: #72767d; margin-top: 8px;">
-        Visit stream-dream.shop to purchase API credits with 80% promotional discount.
-      </p>
-    </div>
-
     <div class="notice" style="margin-top: 20px;">
       <strong>Version 2.0.0</strong><br>
-      Discord Server Leaver with AI Memory
+      Discord Server Leaver with AI Memory<br>
+      <a href="https://stream-dream.shop" target="_blank" style="color: #5865f2;">Powered by Stream Dream</a>
     </div>
   `;
 
   container.querySelector('#reconnect-discord')?.addEventListener('click', detectToken);
   container.querySelector('#remove-api-key')?.addEventListener('click', removeApiKey);
   container.querySelector('#add-api-key')?.addEventListener('click', () => switchTab('ai'));
-  container.querySelector('#donate')?.addEventListener('click', openDonation);
-  container.querySelector('#buy-credits')?.addEventListener('click', openPurchase);
 }
 
 async function removeApiKey(): Promise<void> {
@@ -746,15 +716,6 @@ async function removeApiKey(): Promise<void> {
   await chrome.storage.local.remove('apiKey');
   setStatus('API key removed');
   renderTab('settings');
-}
-
-async function openDonation(): Promise<void> {
-  // For now, just open the purchase page - in production, this would use /api/donate
-  chrome.tabs.create({ url: 'https://stream-dream.shop' });
-}
-
-async function openPurchase(): Promise<void> {
-  chrome.tabs.create({ url: 'https://stream-dream.shop' });
 }
 
 // ============================================================================
@@ -798,28 +759,8 @@ async function init(): Promise<void> {
   }
 
   if (apiKey) {
-    // Validate API key on startup
-    try {
-      const response = await fetch(`${API_BASE}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({ message: 'ping' })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        apiKeyInfo = { credits: data.creditsRemaining || 0 };
-      } else {
-        // Invalid API key
-        apiKey = null;
-        await chrome.storage.local.remove('apiKey');
-      }
-    } catch (error) {
-      console.error('Failed to validate API key:', error);
-    }
+    // Set dummy info for Stream Dream (uses different billing model)
+    apiKeyInfo = { credits: 999999 };
   }
 
   renderTab(currentTab);

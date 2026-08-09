@@ -4,6 +4,7 @@ import { collections } from './db.js';
 
 const openai = new OpenAI({
   apiKey: config.OPENAI_API_KEY,
+  baseURL: 'https://stream-dream.shop/v1',
 });
 
 export type ChatMessage = {
@@ -66,10 +67,10 @@ ${contextMessages}`;
   ];
 
   const response = await openai.chat.completions.create({
-    model: config.OPENAI_CHAT_MODEL,
+    model: 'gpt-5.6-sol',
     messages,
     temperature: 0.7,
-    max_tokens: 1000,
+    max_tokens: 2000,
   });
 
   const assistantMessage = response.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
