@@ -1,4 +1,5 @@
 import { getDiscordToken, fetchGuilds, leaveGuild, type DiscordGuild } from './discord.js';
+import { getToolDefinitions, executeTool } from './discord-tools.js';
 
 // State
 let guilds: DiscordGuild[] = [];
@@ -85,6 +86,7 @@ function renderServersTab(): void {
     <div class="toolbar">
       <input id="filter" type="text" placeholder="Search servers...">
       <button id="refresh" class="secondary">Refresh</button>
+      <button id="auto-leave-settings" class="secondary">⚙️ Auto-Leave</button>
     </div>
     <div class="sticky-actions">
       <button id="leave-selected" class="danger" ${selectedCount === 0 ? 'disabled' : ''}>
@@ -141,6 +143,193 @@ function renderServersTab(): void {
 
   container.querySelector('#refresh')?.addEventListener('click', loadGuilds);
   container.querySelector('#leave-selected')?.addEventListener('click', () => leaveSelected(false));
+  container.querySelector('#auto-leave-settings')?.addEventListener('click', showAutoLeaveSettings);
+}
+
+async function showAutoLeaveSettings(): Promise<void> {
+  const container = document.querySelector('#tab-servers')!;
+
+  // Get current settings
+  const data = await chrome.storage.local.get('autoLeaveSettings');
+  const settings = data.autoLeaveSettings || {
+    enabled: false,
+    inactiveDays: 30,
+    checkOnStartup: false
+  };
+
+  container.innerHTML = `
+    <div style="padding: 16px;">
+      <h3 style="color: #fff; margin-bottom: 16px;">⚙️ Auto-Leave Settings</h3>
+
+      <div class="form-group">
+        <label style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" id="auto-leave-enabled" ${settings.enabled ? 'checked' : ''}>
+          <span>Enable Auto-Leave</span>
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label>Leave servers inactive for:</label>
+        <select id="inactive-days">
+          <option value="7" ${settings.inactiveDays === 7 ? 'selected' : ''}>7 days</option>
+          <option value="14" ${settings.inactiveDays === 14 ? 'selected' : ''}>14 days</option>
+          <option value="30" ${settings.inactiveDays === 30 ? 'selected' : ''}>30 days</option>
+          <option value="60" ${settings.inactiveDays === 60 ? 'selected' : ''}>60 days</option>
+          <option value="90" ${settings.inactiveDays === 90 ? 'selected' : ''}>90 days</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" id="check-on-startup" ${settings.checkOnStartup ? 'checked' : ''}>
+          <span>Check on browser startup</span>
+        </label>
+      </div>
+
+      <button id="check-now" class="primary" style="width: 100%; margin-bottom: 8px;">Check Now</button>
+      <button id="save-settings" class="success" style="width: 100%; margin-bottom: 8px;">Save Settings</button>
+      <button id="back-to-servers" class="secondary" style="width: 100%;">← Back to Servers</button>
+
+      <div id="inactive-servers" style="margin-top: 16px;"></div>
+    </div>
+  `;
+
+  container.querySelector('#check-now')?.addEventListener('click', checkInactiveServers);
+  container.querySelector('#save-settings')?.addEventListener('click', saveAutoLeaveSettings);
+  container.querySelector('#back-to-servers')?.addEventListener('click', () => renderServersTab());
+}
+
+async function checkInactiveServers(): Promise<void> {
+  if (!token) {
+    setStatus('Discord token required', true);
+    return;
+  }
+
+  const inactiveDays = parseInt((document.querySelector('#inactive-days') as HTMLSelectElement).value);
+  const resultsEl = document.querySelector('#inactive-servers')!;
+
+  setStatus('Checking server activity...');
+  resultsEl.innerHTML = '<div class="empty">Checking...</div>';
+
+  try {
+    const inactiveServers: any[] = [];
+    const cutoffDate = new Date(Date.now() - inactiveDays * 24 * 60 * 60 * 1000);
+
+    for (const guild of guilds) {
+      if (guild.owner) continue; // Skip owned servers
+
+      try {
+        // Get channels for this guild
+        const channelsResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/channels`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!channelsResponse.ok) continue;
+
+        const channels = await channelsResponse.json();
+        const textChannels = channels.filter((ch: any) => ch.type === 0);
+
+        let hasRecentActivity = false;
+
+        // Check recent messages in up to 3 channels
+        for (const channel of textChannels.slice(0, 3)) {
+          try {
+            const messagesResponse = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages?limit=1`, {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!messagesResponse.ok) continue;
+
+            const messages = await messagesResponse.json();
+
+            if (messages.length > 0) {
+              const lastMessageDate = new Date(messages[0].timestamp);
+              if (lastMessageDate > cutoffDate) {
+                hasRecentActivity = true;
+                break;
+              }
+            }
+          } catch (err) {
+            console.error('Error checking channel:', err);
+          }
+        }
+
+        if (!hasRecentActivity) {
+          inactiveServers.push(guild);
+        }
+
+        // Rate limit
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (err) {
+        console.error(`Error checking ${guild.name}:`, err);
+      }
+    }
+
+    if (inactiveServers.length === 0) {
+      resultsEl.innerHTML = '<div class="empty">No inactive servers found!</div>';
+      setStatus('All servers are active');
+      return;
+    }
+
+    resultsEl.innerHTML = `
+      <h4 style="color: #fff; margin-bottom: 12px;">Found ${inactiveServers.length} inactive server(s)</h4>
+      <div class="server-list">
+        ${inactiveServers.map(guild => `
+          <label class="server-item">
+            <input type="checkbox" data-guild="${escapeHtml(guild.id)}" checked>
+            <span class="server-name">${escapeHtml(guild.name)}</span>
+          </label>
+        `).join('')}
+      </div>
+      <button id="leave-inactive" class="danger" style="width: 100%; margin-top: 12px;">Leave Selected Inactive Servers</button>
+    `;
+
+    resultsEl.querySelector('#leave-inactive')?.addEventListener('click', async () => {
+      const selected = Array.from(resultsEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
+        .map(cb => cb.dataset.guild)
+        .filter(id => id);
+
+      if (selected.length === 0) return;
+
+      const confirmation = prompt(`Leave ${selected.length} inactive server(s)? Type "LEAVE" to confirm:`);
+      if (confirmation !== 'LEAVE') return;
+
+      for (const guildId of selected) {
+        if (!guildId) continue;
+        try {
+          await leaveGuild(token!, guildId);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error(`Failed to leave ${guildId}:`, error);
+        }
+      }
+
+      await loadGuilds();
+      renderServersTab();
+      setStatus(`Left ${selected.length} server(s)`);
+    });
+
+    setStatus(`Found ${inactiveServers.length} inactive servers`);
+  } catch (error) {
+    resultsEl.innerHTML = '<div class="empty">Error checking servers</div>';
+    setStatus('Check failed', true);
+  }
+}
+
+async function saveAutoLeaveSettings(): Promise<void> {
+  const enabled = (document.querySelector('#auto-leave-enabled') as HTMLInputElement).checked;
+  const inactiveDays = parseInt((document.querySelector('#inactive-days') as HTMLSelectElement).value);
+  const checkOnStartup = (document.querySelector('#check-on-startup') as HTMLInputElement).checked;
+
+  await chrome.storage.local.set({
+    autoLeaveSettings: {
+      enabled,
+      inactiveDays,
+      checkOnStartup
+    }
+  });
+
+  setStatus('Settings saved!');
 }
 
 async function detectToken(): Promise<void> {
@@ -446,37 +635,73 @@ function renderAITab(): void {
     return;
   }
 
-  container.innerHTML = `
-    <div class="ai-credits">
-      <div class="count">Stream Dream AI</div>
-      <div class="label">Powered by gpt-5.6-sol</div>
-    </div>
+  // Load saved chat history
+  chrome.storage.local.get([`chat_history_${apiKey}`], (result) => {
+    const savedHistory = result[`chat_history_${apiKey}`] || [];
 
-    <div id="ai-chat-history" style="max-height: 300px; overflow-y: auto; margin-bottom: 16px; padding: 12px; background: #2f3136; border-radius: 8px;">
-      <div class="empty" style="color: #72767d; text-align: center;">Start a conversation with your AI buddy!</div>
-    </div>
+    container.innerHTML = `
+      <div class="ai-credits">
+        <div class="count">Stream Dream AI</div>
+        <div class="label">Full Discord API access via AI</div>
+      </div>
 
-    <div class="form-group">
-      <textarea id="ai-question" placeholder="Ask me anything about your Discord history..."></textarea>
-    </div>
+      <div id="ai-chat-history" style="max-height: 300px; overflow-y: auto; margin-bottom: 16px; padding: 12px; background: #2f3136; border-radius: 8px;">
+        ${savedHistory.length === 0 ? '<div class="empty" style="color: #72767d; text-align: center;">Ask me to do anything with your Discord account!</div>' : ''}
+      </div>
 
-    <button id="ask-ai" class="primary" style="width: 100%">Send Message</button>
+      <div class="form-group">
+        <input type="file" id="ai-image" accept="image/*" style="margin-bottom: 8px;">
+        <textarea id="ai-question" placeholder="Ask me to fetch messages, send messages, search for things, or analyze trades..."></textarea>
+      </div>
 
-    <div class="notice" style="margin-top: 16px;">
-      <strong>Note:</strong> The AI has access to your Discord message history and can help you search, analyze, and understand your conversations.
-    </div>
-  `;
+      <button id="ask-ai" class="primary" style="width: 100%; margin-bottom: 8px;">Send Message</button>
+      <button id="clear-chat" class="danger" style="width: 100%;">Clear Chat History</button>
 
-  container.querySelector('#ask-ai')?.addEventListener('click', askAI);
+      <div class="notice" style="margin-top: 16px;">
+        <strong>Capabilities:</strong> I can fetch messages, send messages, search, analyze trades, get user info, add reactions, create DMs, and more!
+      </div>
+    `;
+
+    container.querySelector('#ask-ai')?.addEventListener('click', askAI);
+    container.querySelector('#clear-chat')?.addEventListener('click', clearChatHistory);
+
+    // Restore saved messages
+    const chatHistoryEl = container.querySelector('#ai-chat-history')!;
+    savedHistory.forEach((msg: any) => {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'message-item';
+      msgDiv.innerHTML = `
+        <div class="meta" style="color: ${msg.role === 'user' ? '#5865f2' : '#57f287'};">${msg.role === 'user' ? 'You' : 'AI Buddy'}</div>
+        <div class="content">${escapeHtml(msg.content)}</div>
+      `;
+      chatHistoryEl.appendChild(msgDiv);
+    });
+
+    if (savedHistory.length > 0) {
+      chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
+    }
+  });
+}
+
+async function clearChatHistory(): Promise<void> {
+  if (!apiKey) return;
+
+  const confirm = prompt('Clear all chat history? Type CLEAR to confirm:');
+  if (confirm !== 'CLEAR') return;
+
+  await chrome.storage.local.remove(`chat_history_${apiKey}`);
+  renderAITab();
+  setStatus('Chat history cleared');
 }
 
 async function askAI(): Promise<void> {
   const question = (document.querySelector('#ai-question') as HTMLTextAreaElement)?.value;
+  const imageInput = document.querySelector('#ai-image') as HTMLInputElement;
   const chatHistory = document.querySelector('#ai-chat-history')!;
   const textarea = document.querySelector('#ai-question') as HTMLTextAreaElement;
 
-  if (!question) {
-    setStatus('Enter a question', true);
+  if (!question && !imageInput?.files?.[0]) {
+    setStatus('Enter a question or select an image', true);
     return;
   }
 
@@ -486,7 +711,7 @@ async function askAI(): Promise<void> {
   }
 
   if (!token) {
-    setStatus('Discord token required for full context', true);
+    setStatus('Discord token required', true);
     return;
   }
 
@@ -495,104 +720,105 @@ async function askAI(): Promise<void> {
     chatHistory.innerHTML = '';
   }
 
+  // Handle image upload
+  let imageBase64 = '';
+  if (imageInput?.files?.[0]) {
+    const file = imageInput.files[0];
+    imageBase64 = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  const userContent = question || '[Sent an image]';
+
   // Add user message
   const userMsg = document.createElement('div');
   userMsg.className = 'message-item';
   userMsg.innerHTML = `
     <div class="meta" style="color: #5865f2;">You</div>
-    <div class="content">${escapeHtml(question)}</div>
+    <div class="content">${escapeHtml(userContent)}${imageBase64 ? '<br><img src="' + imageBase64 + '" style="max-width: 200px; border-radius: 8px; margin-top: 8px;">' : ''}</div>
   `;
   chatHistory.appendChild(userMsg);
+
+  // Save to history
+  await saveChatMessage('user', userContent);
 
   // Add thinking indicator
   const thinkingMsg = document.createElement('div');
   thinkingMsg.className = 'message-item';
   thinkingMsg.innerHTML = `
     <div class="meta" style="color: #57f287;">AI Buddy</div>
-    <div class="content" style="color: #72767d;">Analyzing your Discord messages...</div>
+    <div class="content" style="color: #72767d;">Thinking...</div>
   `;
   chatHistory.appendChild(thinkingMsg);
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
   textarea.value = '';
-  setStatus('Fetching recent Discord messages...');
+  if (imageInput) imageInput.value = '';
+  setStatus('Processing...');
 
   try {
-    // Fetch recent messages from ALL channels to provide context
-    const recentMessages: any[] = [];
+    // Build message content
+    const messageContent: any[] = [];
 
-    // Get messages from all available servers (up to 500 messages total)
-    for (const guild of guilds) {
-      try {
-        const channelsResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/channels`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+    if (imageBase64) {
+      messageContent.push({
+        type: 'image_url',
+        image_url: { url: imageBase64 }
+      });
+    }
 
-        if (!channelsResponse.ok) continue;
+    if (question) {
+      messageContent.push({
+        type: 'text',
+        text: question
+      });
+    }
 
-        const channels = await channelsResponse.json();
-        const textChannels = channels.filter((ch: any) => ch.type === 0);
+    // Get conversation history
+    const historyData = await chrome.storage.local.get(`chat_history_${apiKey}`);
+    const conversationHistory = (historyData[`chat_history_${apiKey}`] || []).slice(-10); // Last 10 messages
 
-        // Prioritize channels with "trade", "trading", "market" in the name
-        const tradeChannels = textChannels.filter((ch: any) =>
-          ch.name.toLowerCase().includes('trade') ||
-          ch.name.toLowerCase().includes('trading') ||
-          ch.name.toLowerCase().includes('market') ||
-          ch.name.toLowerCase().includes('wfl')
-        );
+    const messages = [
+      {
+        role: 'system',
+        content: `You are an AI assistant with FULL ACCESS to the user's Discord account via API tools. You can:
 
-        const channelsToCheck = [...tradeChannels, ...textChannels].slice(0, 10);
+- fetch_messages: Get messages from any channel
+- send_message: Send messages to channels
+- search_messages: Search for specific content
+- get_guilds: List all servers
+- get_channels: List channels in a server
+- get_user: Get user information
+- add_reaction: React to messages
+- create_dm: Create DM channels
 
-        for (const channel of channelsToCheck) {
-          try {
-            const messagesResponse = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages?limit=50`, {
-              headers: { 'Authorization': `Bearer ${token}` }
-            });
+When the user asks you to do something, USE THE APPROPRIATE TOOL. Don't just describe what you would do - actually call the tool!
 
-            if (!messagesResponse.ok) continue;
+Examples:
+- "fetch messages from channel 123" → call fetch_messages with channel_id
+- "send hello to channel 456" → call send_message
+- "what servers am I in" → call get_guilds
+- "search for trade in server 789" → call search_messages
 
-            const messages = await messagesResponse.json();
+For trade analysis, fetch recent messages from trade channels first, then analyze them.
 
-            for (const msg of messages) {
-              recentMessages.push({
-                content: msg.content,
-                author: msg.author.username,
-                timestamp: msg.timestamp,
-                server: guild.name,
-                channel: channel.name,
-                attachments: msg.attachments?.length > 0 ? msg.attachments.map((a: any) => a.url) : [],
-                embeds: msg.embeds?.length > 0 ? msg.embeds.map((e: any) => JSON.stringify(e)) : []
-              });
-            }
-
-            if (recentMessages.length >= 500) break;
-          } catch (err) {
-            console.error('Error fetching channel messages:', err);
-          }
-        }
-
-        if (recentMessages.length >= 500) break;
-      } catch (err) {
-        console.error('Error fetching guild channels:', err);
+Be proactive and actually execute actions, don't just talk about them!`
+      },
+      ...conversationHistory.map((m: any) => ({
+        role: m.role,
+        content: m.content
+      })),
+      {
+        role: 'user',
+        content: messageContent.length > 0 ? messageContent : question
       }
-    }
+    ];
 
-    setStatus('Asking AI with Discord context...');
-
-    // Build context from fetched messages
-    let contextText = '';
-    if (recentMessages.length > 0) {
-      contextText = '\n\nRecent Discord messages for context (these contain the actual trade details, item names, values, and emoji references):\n' +
-        recentMessages.map(m => {
-          let msg = `[${m.server}/${m.channel}] ${m.author}: ${m.content}`;
-          if (m.attachments.length > 0) msg += ` [images: ${m.attachments.join(', ')}]`;
-          if (m.embeds.length > 0) msg += ` [embeds: ${m.embeds.join(' | ')}]`;
-          return msg;
-        }).join('\n');
-    }
-
-    // Call Stream Dream API directly
-    const response = await fetch('https://stream-dream.shop/v1/chat/completions', {
+    // Call Stream Dream API with function calling
+    let response = await fetch('https://stream-dream.shop/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -600,24 +826,9 @@ async function askAI(): Promise<void> {
       },
       body: JSON.stringify({
         model: 'gpt-5.6-sol',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an AI assistant with access to the user's Discord message history. You can help them analyze trades, determine values, and understand their conversations.
-
-When a user asks about a trade (like "w or l trade" or posts emoji codes), look through the recent messages to find:
-1. What items/emojis are being traded
-2. Their values or rarity
-3. Community opinions on those items
-4. Similar past trades
-
-Analyze the trade based on the Discord context and give a clear W (win), L (loss), or F (fair) verdict with reasoning.${contextText}`
-          },
-          {
-            role: 'user',
-            content: question
-          }
-        ],
+        messages: messages,
+        tools: getToolDefinitions(),
+        tool_choice: 'auto',
         temperature: 0.7,
         max_tokens: 2000
       })
@@ -629,8 +840,57 @@ Analyze the trade based on the Discord context and give a clear W (win), L (loss
       throw new Error(`AI request failed: ${response.status}`);
     }
 
-    const data = await response.json();
-    const reply = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+    let data = await response.json();
+    let assistantMessage = data.choices[0]?.message;
+
+    // Handle function calls
+    while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
+      const toolCall = assistantMessage.tool_calls[0];
+      const toolName = toolCall.function.name;
+      const toolParams = JSON.parse(toolCall.function.arguments);
+
+      setStatus(`Executing: ${toolName}...`);
+
+      try {
+        const toolResult = await executeTool(toolName, toolParams, token);
+
+        // Add tool result to conversation
+        messages.push(assistantMessage);
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(toolResult)
+        });
+
+        // Get next response
+        response = await fetch('https://stream-dream.shop/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-5.6-sol',
+            messages: messages,
+            tools: getToolDefinitions(),
+            tool_choice: 'auto',
+            temperature: 0.7,
+            max_tokens: 2000
+          })
+        });
+
+        if (!response.ok) throw new Error('Tool response failed');
+
+        data = await response.json();
+        assistantMessage = data.choices[0]?.message;
+      } catch (toolError) {
+        console.error('Tool execution error:', toolError);
+        assistantMessage.content = `Error executing ${toolName}: ${toolError instanceof Error ? toolError.message : 'Unknown error'}`;
+        break;
+      }
+    }
+
+    const reply = assistantMessage?.content || 'Sorry, I could not generate a response.';
 
     // Replace thinking with actual response
     thinkingMsg.innerHTML = `
@@ -639,7 +899,10 @@ Analyze the trade based on the Discord context and give a clear W (win), L (loss
     `;
     chatHistory.scrollTop = chatHistory.scrollHeight;
 
-    setStatus(`Response received (${recentMessages.length} messages analyzed)`);
+    // Save assistant message
+    await saveChatMessage('assistant', reply);
+
+    setStatus('Response received');
   } catch (error) {
     console.error('AI error:', error);
     thinkingMsg.innerHTML = `
@@ -648,6 +911,23 @@ Analyze the trade based on the Discord context and give a clear W (win), L (loss
     `;
     setStatus('AI error', true);
   }
+}
+
+async function saveChatMessage(role: string, content: string): Promise<void> {
+  if (!apiKey) return;
+
+  const key = `chat_history_${apiKey}`;
+  const data = await chrome.storage.local.get(key);
+  const history = data[key] || [];
+
+  history.push({ role, content, timestamp: Date.now() });
+
+  // Keep last 50 messages
+  if (history.length > 50) {
+    history.splice(0, history.length - 50);
+  }
+
+  await chrome.storage.local.set({ [key]: history });
 }
 
 async function purchaseCredits(pack: string): Promise<void> {
