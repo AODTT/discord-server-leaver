@@ -257,7 +257,7 @@ function renderHistoryTab(): void {
     container.innerHTML = `
       <div class="login-screen">
         <h3>Discord Token Required</h3>
-        <p>Connect your Discord account first to view message history.</p>
+        <p>Connect your Discord account first to fetch message history.</p>
         <button id="detect-token-history" class="primary">Detect Discord Token</button>
       </div>
     `;
@@ -265,114 +265,142 @@ function renderHistoryTab(): void {
     return;
   }
 
-  container.innerHTML = `
-    <div class="toolbar">
-      <select id="history-server" style="flex: 1; margin-right: 8px;">
-        <option value="">Select a server...</option>
-        ${guilds.map(g => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join('')}
-      </select>
-      <button id="load-channels" class="secondary">Load Channels</button>
-    </div>
-    <div class="form-group" id="channel-selector" style="display: none;">
-      <label>Channel</label>
-      <select id="history-channel">
-        <option value="">Select a channel...</option>
-      </select>
-      <button id="load-messages" class="primary" style="margin-top: 8px;">Load Messages</button>
-    </div>
-    <div id="message-results" class="server-list">
-      <div class="empty">Select a server and channel to view message history.</div>
+  // Check if history fetch is in progress
+  chrome.storage.local.get(['historyFetchStatus'], (result) => {
+    const status = result.historyFetchStatus || { running: false, progress: 0, total: 0 };
+
+    container.innerHTML = `
+      <div class="ai-credits">
+        <div class="count">Discord History Indexer</div>
+        <div class="label">Fetching all your messages for AI access</div>
+      </div>
+
+      ${status.running ? `
+        <div class="notice" style="background: #5865f2; color: #fff;">
+          <strong>⚙️ Indexing in progress...</strong><br>
+          ${status.progress} / ${status.total} channels processed
+        </div>
+      ` : `
+        <button id="start-fetch" class="success" style="width: 100%; margin-bottom: 16px;">
+          🚀 Start Fetching All Discord History
+        </button>
+      `}
+
+      <div class="form-group">
+        <label>Search Fetched Messages</label>
+        <input id="search-query" type="text" placeholder="Search your messages...">
+        <button id="search-btn" class="primary" style="margin-top: 8px;">Search</button>
+      </div>
+
+      <div id="history-stats" style="padding: 12px; background: #2f3136; border-radius: 8px; margin-bottom: 16px;">
+        <div style="font-size: 12px; color: #72767d;">Loading statistics...</div>
+      </div>
+
+      <div id="message-results" class="server-list">
+        <div class="empty">Start fetching to index all your Discord messages.</div>
+      </div>
+    `;
+
+    container.querySelector('#start-fetch')?.addEventListener('click', startHistoryFetch);
+    container.querySelector('#search-btn')?.addEventListener('click', searchLocalHistory);
+    loadHistoryStats();
+  });
+}
+
+async function loadHistoryStats(): Promise<void> {
+  const statsEl = document.querySelector('#history-stats');
+  if (!statsEl) return;
+
+  const data = await chrome.storage.local.get('discordHistory');
+  const messages = data.discordHistory || [];
+
+  if (messages.length === 0) {
+    statsEl.innerHTML = '<div style="font-size: 12px; color: #72767d;">No messages indexed yet. Click "Start Fetching" to begin.</div>';
+    return;
+  }
+
+  const servers = new Set(messages.map((m: any) => m.server)).size;
+  const channels = new Set(messages.map((m: any) => m.channelId)).size;
+
+  statsEl.innerHTML = `
+    <div style="display: flex; justify-content: space-around; text-align: center;">
+      <div>
+        <div style="font-size: 24px; color: #57f287; font-weight: bold;">${messages.length}</div>
+        <div style="font-size: 12px; color: #72767d;">Messages</div>
+      </div>
+      <div>
+        <div style="font-size: 24px; color: #5865f2; font-weight: bold;">${servers}</div>
+        <div style="font-size: 12px; color: #72767d;">Servers</div>
+      </div>
+      <div>
+        <div style="font-size: 24px; color: #faa61a; font-weight: bold;">${channels}</div>
+        <div style="font-size: 12px; color: #72767d;">Channels</div>
+      </div>
     </div>
   `;
+}
 
-  container.querySelector('#load-channels')?.addEventListener('click', loadChannels);
-  container.querySelector('#load-messages')?.addEventListener('click', loadMessages);
+async function startHistoryFetch(): Promise<void> {
+  if (!token) {
+    setStatus('Discord token required', true);
+    return;
+  }
+
+  setStatus('Starting history fetch...');
+
+  // Send message to background script to start fetching
+  chrome.runtime.sendMessage({
+    type: 'START_HISTORY_FETCH',
+    token: token,
+    guilds: guilds
+  });
+
+  setStatus('History fetch started in background. You can close the extension.');
+  renderHistoryTab();
+}
+
+async function searchLocalHistory(): Promise<void> {
+  const query = (document.querySelector('#search-query') as HTMLInputElement)?.value.toLowerCase();
+  const resultsEl = document.querySelector('#message-results')!;
+
+  if (!query) {
+    setStatus('Enter a search term', true);
+    return;
+  }
+
+  setStatus('Searching...');
+
+  const data = await chrome.storage.local.get('discordHistory');
+  const messages = data.discordHistory || [];
+
+  const results = messages.filter((m: any) =>
+    m.content?.toLowerCase().includes(query) ||
+    m.author?.toLowerCase().includes(query)
+  ).slice(0, 100); // Limit to 100 results
+
+  if (results.length === 0) {
+    resultsEl.innerHTML = '<div class="empty">No messages found.</div>';
+    setStatus('No results');
+    return;
+  }
+
+  resultsEl.innerHTML = results.map((msg: any) => `
+    <div class="message-item">
+      <div class="meta">${escapeHtml(msg.author || 'Unknown')} • ${new Date(msg.timestamp).toLocaleString()}</div>
+      <div class="content">${escapeHtml(msg.content || '[No content]')}</div>
+      <div class="meta">${escapeHtml(msg.server || 'Unknown Server')} / ${escapeHtml(msg.channel || 'Unknown Channel')}</div>
+    </div>
+  `).join('');
+
+  setStatus(`Found ${results.length} messages`);
 }
 
 async function loadChannels(): Promise<void> {
-  const serverSelect = document.querySelector<HTMLSelectElement>('#history-server');
-  const guildId = serverSelect?.value;
-
-  if (!guildId || !token) {
-    setStatus('Select a server first', true);
-    return;
-  }
-
-  setStatus('Loading channels...');
-
-  try {
-    const response = await fetch(`${API_BASE}/api/discord/channels`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ discordToken: token, guildId })
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to load channels');
-    }
-
-    const data = await response.json();
-    const textChannels = data.channels.filter((ch: any) => ch.type === 0); // Text channels only
-
-    const channelSelect = document.querySelector<HTMLSelectElement>('#history-channel');
-    if (channelSelect) {
-      channelSelect.innerHTML = '<option value="">Select a channel...</option>' +
-        textChannels.map((ch: any) => `<option value="${escapeHtml(ch.id)}">${escapeHtml(ch.name)}</option>`).join('');
-    }
-
-    const channelSelector = document.querySelector<HTMLElement>('#channel-selector');
-    if (channelSelector) channelSelector.style.display = 'block';
-
-    setStatus(`Loaded ${textChannels.length} channels`);
-  } catch (error) {
-    setStatus('Failed to load channels', true);
-  }
+  // Removed - not needed anymore
 }
 
 async function loadMessages(): Promise<void> {
-  const channelSelect = document.querySelector<HTMLSelectElement>('#history-channel');
-  const channelId = channelSelect?.value;
-  const resultsEl = document.querySelector('#message-results')!;
-
-  if (!channelId || !token) {
-    setStatus('Select a channel first', true);
-    return;
-  }
-
-  setStatus('Loading messages...');
-  resultsEl.innerHTML = '<div class="empty">Loading...</div>';
-
-  try {
-    const response = await fetch(`${API_BASE}/api/discord/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ discordToken: token, channelId, limit: 50 })
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to load messages');
-    }
-
-    const data = await response.json();
-
-    if (data.messages.length === 0) {
-      resultsEl.innerHTML = '<div class="empty">No messages found in this channel.</div>';
-      setStatus('No messages');
-      return;
-    }
-
-    resultsEl.innerHTML = data.messages.map((msg: any) => `
-      <div class="message-item">
-        <div class="meta">${escapeHtml(msg.author?.username || 'Unknown')} • ${new Date(msg.timestamp).toLocaleString()}</div>
-        <div class="content">${escapeHtml(msg.content || '[No content]')}</div>
-      </div>
-    `).join('');
-
-    setStatus(`Loaded ${data.messages.length} messages`);
-  } catch (error) {
-    resultsEl.innerHTML = '<div class="empty">Failed to load messages. Make sure you have permission to view this channel.</div>';
-    setStatus('Load error', true);
-  }
+  // Removed - not needed anymore
 }
 
 async function saveApiKey(): Promise<void> {
@@ -485,30 +513,61 @@ async function askAI(): Promise<void> {
   setStatus('Asking AI...');
 
   try {
-    const response = await fetch(`${API_BASE}/api/chat`, {
+    // Get recent Discord history to provide context
+    const historyData = await chrome.storage.local.get('discordHistory');
+    const recentMessages = historyData.discordHistory || [];
+
+    let contextText = '';
+    if (recentMessages.length > 0) {
+      contextText = '\n\nRecent Discord message context:\n' +
+        recentMessages.slice(-50).map((m: any) =>
+          `[${m.server}/${m.channel}] ${m.author}: ${m.content}`
+        ).join('\n');
+    }
+
+    // Call Stream Dream API directly
+    const response = await fetch('https://stream-dream.shop/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({ message: question })
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an AI assistant with access to the user's Discord message history. You can help them search, analyze, and understand their conversations. Be helpful and conversational.${contextText}`
+          },
+          {
+            role: 'user',
+            content: question
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 2000
+      })
     });
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Stream Dream API error:', errorText);
       throw new Error('AI request failed');
     }
 
     const data = await response.json();
+    const reply = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
 
     // Replace thinking with actual response
     thinkingMsg.innerHTML = `
       <div class="meta" style="color: #57f287;">AI Buddy</div>
-      <div class="content">${escapeHtml(data.reply)}</div>
+      <div class="content">${escapeHtml(reply)}</div>
     `;
     chatHistory.scrollTop = chatHistory.scrollHeight;
 
     setStatus('Response received');
   } catch (error) {
+    console.error('AI error:', error);
     thinkingMsg.innerHTML = `
       <div class="meta" style="color: #ed4245;">Error</div>
       <div class="content">Failed to get AI response. Please check your API key and try again.</div>
