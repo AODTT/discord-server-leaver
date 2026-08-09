@@ -1,5 +1,15 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "build": { "buildCommand": "npm run build -w @discord-memory/server" },
-  "deploy": { "startCommand": "npm run start -w @discord-memory/server", "healthcheckPath": "/health", "healthcheckTimeout": 120, "restartPolicyType": "ON_FAILURE", "restartPolicyMaxRetries": 3 }
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "npm install && npm run build --workspace=@discord-memory/server"
+  },
+  "deploy": {
+    "startCommand": "npm run start --workspace=@discord-memory/server",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
 }
+
