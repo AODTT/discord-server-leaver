@@ -24,7 +24,7 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
 }
 
 export function oauthStartUrl(state: string): string {
-  const params = new URLSearchParams({ client_id: config.DISCORD_CLIENT_ID, response_type: 'code', redirect_uri: config.DISCORD_REDIRECT_URI, scope: 'identify guilds', state, prompt: 'consent' });
+  const params = new URLSearchParams({ client_id: config.DISCORD_CLIENT_ID, response_type: 'code', redirect_uri: config.DISCORD_REDIRECT_URI, scope: 'identify guilds messages.read', state, prompt: 'consent' });
   return `https://discord.com/oauth2/authorize?${params.toString()}`;
 }
 
@@ -49,6 +49,34 @@ export async function userCanManageGuild(userId: string, guildId: string): Promi
   if (!guild) return false;
   if (guild.owner) return true;
   try { return (BigInt(guild.permissions ?? '0') & 0x20n) === 0x20n; } catch { return false; }
+}
+
+export async function userGuildChannels(userId: string, guildId: string): Promise<DiscordChannel[]> {
+  const token = await getOAuthToken(userId);
+  if (!token) return [];
+  try {
+    return request(`/guilds/${encodeURIComponent(guildId)}/channels`, {}, `Bearer ${token.accessToken}`);
+  } catch {
+    return [];
+  }
+}
+
+export async function userChannelMessages(userId: string, channelId: string, limit = 100, before?: string): Promise<Record<string, unknown>[]> {
+  const token = await getOAuthToken(userId);
+  if (!token) return [];
+  const params = new URLSearchParams({ limit: String(Math.min(Math.max(limit, 1), 100)) });
+  if (before) params.set('before', before);
+  try {
+    return request(`/channels/${encodeURIComponent(channelId)}/messages?${params}`, {}, `Bearer ${token.accessToken}`);
+  } catch {
+    return [];
+  }
+}
+
+export async function userSendMessage(userId: string, channelId: string, content: string): Promise<void> {
+  const token = await getOAuthToken(userId);
+  if (!token) throw new Error('Discord authorization expired');
+  await request(`/channels/${encodeURIComponent(channelId)}/messages`, { method: 'POST', body: JSON.stringify({ content: content.slice(0, 2000), allowed_mentions: { parse: [] } }) }, `Bearer ${token.accessToken}`);
 }
 
 export async function botGuildChannels(guildId: string): Promise<DiscordChannel[]> {

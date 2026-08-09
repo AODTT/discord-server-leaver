@@ -75,10 +75,10 @@ app.post('/guilds/:guildId/leave', requireAuth, async (request: AuthenticatedReq
 app.get('/guilds/:guildId/channels', requireAuth, async (request: AuthenticatedRequest, response) => {
   try {
     if (!(await userCanManageGuild(request.user!.discordId, String(request.params.guildId)))) { response.status(403).json({ error: 'Manage Server permission is required' }); return; }
-    const { botGuildChannels } = await import('./discord.js');
-    const channels = await botGuildChannels(String(request.params.guildId));
+    const { userGuildChannels } = await import('./discord.js');
+    const channels = await userGuildChannels(request.user!.discordId, String(request.params.guildId));
     response.json({ channels: channels.filter((channel) => [0, 5, 10, 11, 12, 15].includes(channel.type)).map((channel) => ({ id: channel.id, name: channel.name ?? channel.id, type: channel.type })) });
-  } catch (error) { response.status(502).json({ error: error instanceof Error ? error.message : 'Unable to load bot channels' }); }
+  } catch (error) { response.status(502).json({ error: error instanceof Error ? error.message : 'Unable to load channels' }); }
 });
 
 app.get('/messages/search', requireAuth, async (request: AuthenticatedRequest, response) => {
