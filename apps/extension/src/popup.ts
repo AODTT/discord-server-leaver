@@ -485,6 +485,11 @@ async function askAI(): Promise<void> {
     return;
   }
 
+  if (!token) {
+    setStatus('Discord token required for full context', true);
+    return;
+  }
+
   // Clear empty state if present
   if (chatHistory.querySelector('.empty')) {
     chatHistory.innerHTML = '';
@@ -504,24 +509,71 @@ async function askAI(): Promise<void> {
   thinkingMsg.className = 'message-item';
   thinkingMsg.innerHTML = `
     <div class="meta" style="color: #57f287;">AI Buddy</div>
-    <div class="content" style="color: #72767d;">Thinking...</div>
+    <div class="content" style="color: #72767d;">Analyzing your Discord messages...</div>
   `;
   chatHistory.appendChild(thinkingMsg);
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
   textarea.value = '';
-  setStatus('Asking AI...');
+  setStatus('Fetching recent Discord messages...');
 
   try {
-    // Get recent Discord history to provide context
-    const historyData = await chrome.storage.local.get('discordHistory');
-    const recentMessages = historyData.discordHistory || [];
+    // Fetch recent messages from ALL channels to provide context
+    const recentMessages: any[] = [];
 
+    // Get messages from multiple recent channels (up to 200 messages total)
+    for (const guild of guilds.slice(0, 5)) { // Check last 5 servers
+      try {
+        const channelsResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/channels`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!channelsResponse.ok) continue;
+
+        const channels = await channelsResponse.json();
+        const textChannels = channels.filter((ch: any) => ch.type === 0).slice(0, 3); // First 3 text channels per server
+
+        for (const channel of textChannels) {
+          try {
+            const messagesResponse = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages?limit=20`, {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!messagesResponse.ok) continue;
+
+            const messages = await messagesResponse.json();
+
+            for (const msg of messages) {
+              recentMessages.push({
+                content: msg.content,
+                author: msg.author.username,
+                timestamp: msg.timestamp,
+                server: guild.name,
+                channel: channel.name,
+                attachments: msg.attachments?.length > 0 ? msg.attachments.map((a: any) => a.url) : []
+              });
+            }
+
+            if (recentMessages.length >= 200) break;
+          } catch (err) {
+            console.error('Error fetching channel messages:', err);
+          }
+        }
+
+        if (recentMessages.length >= 200) break;
+      } catch (err) {
+        console.error('Error fetching guild channels:', err);
+      }
+    }
+
+    setStatus('Asking AI with Discord context...');
+
+    // Build context from fetched messages
     let contextText = '';
     if (recentMessages.length > 0) {
-      contextText = '\n\nRecent Discord message context:\n' +
-        recentMessages.slice(-50).map((m: any) =>
-          `[${m.server}/${m.channel}] ${m.author}: ${m.content}`
+      contextText = '\n\nRecent Discord messages for context:\n' +
+        recentMessages.map(m =>
+          `[${m.server}/${m.channel}] ${m.author}: ${m.content}${m.attachments.length > 0 ? ' [attachments: ' + m.attachments.join(', ') + ']' : ''}`
         ).join('\n');
     }
 
@@ -537,7 +589,7 @@ async function askAI(): Promise<void> {
         messages: [
           {
             role: 'system',
-            content: `You are an AI assistant with access to the user's Discord message history. You can help them search, analyze, and understand their conversations. Be helpful and conversational.${contextText}`
+            content: `You are an AI assistant with access to the user's Discord message history. You can help them search, analyze, and understand their conversations. When answering questions about trades, items, values, or game-related content, look at the recent messages for context. Be helpful, accurate, and conversational.${contextText}`
           },
           {
             role: 'user',
@@ -552,7 +604,7 @@ async function askAI(): Promise<void> {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Stream Dream API error:', errorText);
-      throw new Error('AI request failed');
+      throw new Error(`AI request failed: ${response.status}`);
     }
 
     const data = await response.json();
@@ -565,12 +617,12 @@ async function askAI(): Promise<void> {
     `;
     chatHistory.scrollTop = chatHistory.scrollHeight;
 
-    setStatus('Response received');
+    setStatus(`Response received (${recentMessages.length} messages analyzed)`);
   } catch (error) {
     console.error('AI error:', error);
     thinkingMsg.innerHTML = `
       <div class="meta" style="color: #ed4245;">Error</div>
-      <div class="content">Failed to get AI response. Please check your API key and try again.</div>
+      <div class="content">Failed to get AI response: ${error instanceof Error ? error.message : 'Unknown error'}. Please check your API key and try again.</div>
     `;
     setStatus('AI error', true);
   }
