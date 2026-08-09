@@ -3,14 +3,15 @@
   "name": "Discord Server Leaver",
   "description": "Bulk-manage your Discord servers, search message history, schedule messages, and more.",
   "version": "2.0.0",
-  "permissions": ["storage", "scripting", "tabs"],
+  "permissions": ["storage", "scripting", "tabs", "identity"],
   "host_permissions": [
     "*://discord.com/*",
-    "https://discord.com/api/*"
+    "https://discord.com/api/*",
+    "https://discord-server-leaver-production.up.railway.app/*"
   ],
   "action": {
     "default_title": "Discord Server Leaver",
-    "default_popup": "popup.html"
+    "default_popup": "dashboard.html"
   },
   "background": {
     "service_worker": "background.js"
