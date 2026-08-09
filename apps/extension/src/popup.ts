@@ -79,31 +79,57 @@ function renderServersTab(): void {
     return;
   }
 
+  const selectedCount = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked:not(:disabled)').length;
+
   container.innerHTML = `
     <div class="toolbar">
       <input id="filter" type="text" placeholder="Search servers...">
       <button id="refresh" class="secondary">Refresh</button>
     </div>
+    <div class="sticky-actions">
+      <button id="leave-selected" class="danger" ${selectedCount === 0 ? 'disabled' : ''}>
+        Leave Selected ${selectedCount > 0 ? `(${selectedCount})` : ''}
+      </button>
+    </div>
     <div class="server-list" id="servers">
       ${guilds.length === 0
         ? '<div class="empty">No servers loaded.</div>'
-        : guilds.map(guild => `
+        : guilds.map(guild => {
+          const iconUrl = guild.icon
+            ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=64`
+            : null;
+
+          return `
           <label class="server-item" ${guild.owner ? 'data-owner="true"' : ''}>
             <input
               type="checkbox"
               data-guild="${escapeHtml(guild.id)}"
               ${guild.owner ? 'disabled' : ''}
             >
+            ${iconUrl
+              ? `<img class="server-icon" src="${iconUrl}" alt="">`
+              : '<div class="server-icon-placeholder"></div>'}
             <span class="server-name">${escapeHtml(guild.name)}</span>
             ${guild.owner ? '<span class="owner-badge">OWNER</span>' : ''}
           </label>
-        `).join('')}
-    </div>
-    <div class="actions">
-      <button id="leave-selected" class="danger">Leave Selected Servers</button>
-      <button id="keep-selected" class="secondary">Keep Selected (Leave Others)</button>
+        `;
+        }).join('')}
     </div>
   `;
+
+  // Update button state on checkbox change
+  const updateLeaveButton = () => {
+    const count = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked:not(:disabled)').length;
+    const leaveBtn = container.querySelector<HTMLButtonElement>('#leave-selected');
+    if (leaveBtn) {
+      leaveBtn.disabled = count === 0;
+      leaveBtn.textContent = `Leave Selected ${count > 0 ? `(${count})` : ''}`;
+    }
+  };
+
+  container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(checkbox => {
+    checkbox.addEventListener('change', updateLeaveButton);
+  });
 
   container.querySelector<HTMLInputElement>('#filter')?.addEventListener('input', (e) => {
     const term = (e.target as HTMLInputElement).value.toLowerCase();
@@ -115,7 +141,6 @@ function renderServersTab(): void {
 
   container.querySelector('#refresh')?.addEventListener('click', loadGuilds);
   container.querySelector('#leave-selected')?.addEventListener('click', () => leaveSelected(false));
-  container.querySelector('#keep-selected')?.addEventListener('click', () => leaveSelected(true));
 }
 
 async function detectToken(): Promise<void> {

@@ -11,7 +11,7 @@
   ],
   "action": {
     "default_title": "Discord Server Leaver",
-    "default_popup": "dashboard.html"
+    "default_popup": "popup.html"
   },
   "background": {
     "service_worker": "background.js"
