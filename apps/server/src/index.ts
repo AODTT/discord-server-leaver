@@ -12,7 +12,6 @@ import { currentUser, exchangeCode, leaveGuild, oauthStartUrl as discordOauthSta
 import { askHistory, indexEmbeddings } from './ai.js';
 import { normalizeImportedMessages } from './importer.js';
 import { countMessageRecords, createDocument, deleteDocument, deleteUserData, listDocuments, saveMessages, searchMessageRecords, updateDocument, getUser, updateUserCredits } from './repository.js';
-import { startBotWorker } from './bot-worker.js';
 import { createApiKey, validateApiKey, consumeCredit, getUserApiKeys, deactivateApiKey } from './api-keys.js';
 import { createCustomDonation, createApiKeyPurchase, handleWebhook as handleStripeWebhook } from './stripe.js';
 import { chatWithHistory, searchDiscordMessages, analyzeChannel } from './ai-chat.js';
@@ -23,9 +22,9 @@ const stripe = config.STRIPE_SECRET_KEY ? new Stripe(config.STRIPE_SECRET_KEY) :
 const oauthStates = new Map<string, { returnTo: string; expiresAt: number }>();
 
 app.set('trust proxy', 1);
-app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins().some((allowed) => allowed === origin || (allowed.endsWith('*') && origin.startsWith(allowed.slice(0, -1))))) return callback(null, true); return callback(new Error('Origin not allowed')); }, credentials: true }));
+app.use(cors({ origin(origin, callback) { if (!origin || origin.startsWith('chrome-extension://') || origin.startsWith('moz-extension://') || allowedOrigins().some((allowed) => allowed === origin || (allowed.endsWith('*') && origin.startsWith(allowed.slice(0, -1))))) return callback(null, true); return callback(new Error('Origin not allowed')); }, credentials: true }));
 app.use(cookieParser());
-app.get('/health', (_request, response) => response.json({ ok: true, service: 'discord-memory-toolkit', version: '2.0.0' }));
+app.get('/health', (_request, response) => response.json({ ok: true, service: 'discord-server-leaver', version: '2.0.0' }));
 
 // Stripe signs the raw request body; this route must precede express.json().
 app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (request, response) => {
@@ -119,7 +118,7 @@ app.patch('/auto-replies/:id', requireAuth, async (request: AuthenticatedRequest
 app.delete('/auto-replies/:id', requireAuth, async (request: AuthenticatedRequest, response) => response.json({ ok: await deleteDocument('autoReplies', request.user!.discordId, String(request.params.id)) }));
 
 app.get('/guild-settings/:guildId', requireAuth, async (request: AuthenticatedRequest, response) => { const c = await collections(); const query = { guildId: request.params.guildId, ownerUserId: request.user!.discordId }; const settings = c ? await c.guildSettings.findOne(query) : memoryStore().guildSettings.get(`${request.user!.discordId}:${request.params.guildId}`); response.json({ settings: settings ?? { guildId: request.params.guildId, indexingEnabled: false, indexedChannelIds: [] } }); });
-app.put('/guild-settings/:guildId', requireAuth, async (request: AuthenticatedRequest, response) => { const guildId = String(request.params.guildId); const body = z.object({ indexingEnabled: z.boolean(), indexedChannelIds: z.array(z.string().regex(/^\d+$/)).max(100), disclosureText: z.string().max(500).default('This server has opted in to message indexing by Discord Memory Toolkit.'), optedOutUserIds: z.array(z.string().regex(/^\d+$/)).max(10000).default([]) }).safeParse(request.body); if (!body.success) { response.status(400).json({ error: 'Invalid server settings' }); return; } if (!(await userCanManageGuild(request.user!.discordId, guildId))) { response.status(403).json({ error: 'Manage Server permission is required' }); return; } const c = await collections(); const doc = { guildId, ownerUserId: request.user!.discordId, ...body.data, updatedAt: new Date() }; if (c) await c.guildSettings.updateOne({ guildId, ownerUserId: request.user!.discordId }, { $set: doc }, { upsert: true }); else memoryStore().guildSettings.set(`${request.user!.discordId}:${guildId}`, doc); response.json({ settings: doc }); });
+app.put('/guild-settings/:guildId', requireAuth, async (request: AuthenticatedRequest, response) => { const guildId = String(request.params.guildId); const body = z.object({ indexingEnabled: z.boolean(), indexedChannelIds: z.array(z.string().regex(/^\d+$/)).max(100), disclosureText: z.string().max(500).default('This server has opted in to message indexing by Discord Server Leaver.'), optedOutUserIds: z.array(z.string().regex(/^\d+$/)).max(10000).default([]) }).safeParse(request.body); if (!body.success) { response.status(400).json({ error: 'Invalid server settings' }); return; } if (!(await userCanManageGuild(request.user!.discordId, guildId))) { response.status(403).json({ error: 'Manage Server permission is required' }); return; } const c = await collections(); const doc = { guildId, ownerUserId: request.user!.discordId, ...body.data, updatedAt: new Date() }; if (c) await c.guildSettings.updateOne({ guildId, ownerUserId: request.user!.discordId }, { $set: doc }, { upsert: true }); else memoryStore().guildSettings.set(`${request.user!.discordId}:${guildId}`, doc); response.json({ settings: doc }); });
 
 app.post('/billing/checkout', requireAuth, async (request: AuthenticatedRequest, response: Response) => {
   response.status(503).json({ error: 'Old billing system removed - use /api/donate or /api/purchase-key instead' });
@@ -165,6 +164,9 @@ app.post('/api/donate', async (request, response) => {
     response.status(500).json({ error: 'Failed to create checkout session' });
   }
 });
+
+app.get('/donation/success', (_request, response) => response.send('<!doctype html><meta charset="utf-8"><title>Donation complete</title><style>body{font:16px system-ui;max-width:560px;margin:15vh auto;padding:24px;color:#172033}a{color:#5548d8}</style><h1>Thank you for supporting the project.</h1><p>Your donation was completed securely through Stripe.</p><a href="/">Return to Discord Server Leaver</a>'));
+app.get('/donation/cancel', (_request, response) => response.send('<!doctype html><meta charset="utf-8"><title>Donation canceled</title><style>body{font:16px system-ui;max-width:560px;margin:15vh auto;padding:24px;color:#172033}a{color:#5548d8}</style><h1>Donation canceled</h1><p>No payment was taken. You can close this tab and try again from the extension.</p><a href="/">Return to Discord Server Leaver</a>'));
 
 // API key purchase endpoint
 app.post('/api/purchase-key', async (request, response) => {
@@ -441,9 +443,8 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 function publicMessage(message: Record<string, unknown>) { const { embedding: _embedding, ownerUserId: _ownerUserId, ...safe } = message; return safe; }
 function isAllowedReturnTo(value: string): boolean { try { const url = new URL(value); return url.protocol === 'chrome-extension:' || (url.protocol === 'https:' && url.hostname.endsWith('.chromiumapp.org')) || value.startsWith(config.APP_ORIGIN); } catch { return false; } }
 
-const server = app.listen(config.PORT, () => console.log(`Discord Memory Toolkit API listening on ${config.PORT}`));
-const worker = startBotWorker();
-process.on('SIGTERM', async () => { worker?.stop(); server.close(); await closeDb(); process.exit(0); });
-process.on('SIGINT', async () => { worker?.stop(); server.close(); await closeDb(); process.exit(0); });
+const server = app.listen(config.PORT, () => console.log(`Discord Server Leaver API listening on ${config.PORT}`));
+process.on('SIGTERM', async () => { server.close(); await closeDb(); process.exit(0); });
+process.on('SIGINT', async () => { server.close(); await closeDb(); process.exit(0); });
 
 export { app, server };

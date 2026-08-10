@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Discord Server Leaver",
-  "description": "Bulk-manage your Discord servers, search message history, schedule messages, and more.",
+  "description": "Bulk-manage your Discord servers with a focused, private extension.",
   "version": "2.0.0",
   "permissions": ["storage", "scripting", "tabs", "identity"],
   "host_permissions": [

@@ -28,7 +28,13 @@ export async function getDb(): Promise<Db | undefined> {
     client = new MongoClient(config.MONGODB_URI, { maxPoolSize: 10 });
     await client.connect();
     database = client.db(config.MONGODB_DB);
-    await ensureIndexes(database);
+    try {
+      await ensureIndexes(database);
+    } catch (error) {
+      // Index maintenance must not take down public endpoints such as health
+      // checks and Stripe checkout when Mongo is temporarily low on disk.
+      console.warn('Mongo index initialization skipped:', error instanceof Error ? error.message : error);
+    }
   }
   return database;
 }

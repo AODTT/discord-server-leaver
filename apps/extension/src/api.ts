@@ -40,7 +40,7 @@ export async function deleteRule(id: string) { return api<{ ok: boolean }>(`/aut
 export async function listMemories() { return api<{ memories: Record<string, unknown>[] }>('/memories'); }
 export async function createMemory(data: Record<string, unknown>) { return api<{ memory: Record<string, unknown> }>('/memories', { method: 'POST', body: JSON.stringify(data) }); }
 export async function createCheckout(pack: '50' | '120' | '300') { return api<{ url: string }>('/billing/checkout', { method: 'POST', body: JSON.stringify({ pack }) }); }
+export async function createDonation(amount: number, email: string) { return api<{ url: string }>('/api/donate', { method: 'POST', body: JSON.stringify({ amount, email }) }); }
 export async function deleteCloudData() { return api<{ ok: boolean }>('/data/all', { method: 'DELETE' }); }
-export async function getPublicConfig() { return api<{ donationUrl?: string; siteUrl?: string; botInviteUrl?: string }>('/config/public'); }
+export async function getPublicConfig() { return api<{ apiOrigin: string; minDonation?: number; maxDonation?: number; promoDiscount?: number; donationUrl?: string; siteUrl?: string; botInviteUrl?: string }>('/config/public'); }
 export async function logout() { try { await api('/auth/logout', { method: 'POST' }); } finally { await chrome.storage.local.remove('sessionToken'); } }
-

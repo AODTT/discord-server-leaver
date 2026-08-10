@@ -1,5 +1,6 @@
 import { getDiscordToken, fetchGuilds, leaveGuild, type DiscordGuild } from './discord.js';
 import { getToolDefinitions, executeTool } from './discord-tools.js';
+import { apiOrigin } from './api.js';
 
 // State
 let guilds: DiscordGuild[] = [];
@@ -8,11 +9,13 @@ let currentTab = 'servers';
 let apiKey: string | null = null;
 let apiKeyInfo: any = null;
 
-const API_BASE = 'https://discord-server-leaver-production.up.railway.app';
+let donationMin = 5;
+let donationMax = 500;
+let statusTimer: number | undefined;
 
 // Elements
 const statusEl = document.querySelector<HTMLDivElement>('#status')!;
-const userInfoEl = document.querySelector<HTMLDivElement>('#user-info')!;;
+const userInfoEl = document.querySelector<HTMLDivElement>('#user-info')!;
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
@@ -24,8 +27,73 @@ function escapeHtml(value: unknown): string {
 }
 
 function setStatus(text: string, error = false): void {
+  window.clearTimeout(statusTimer);
   statusEl.textContent = text;
-  statusEl.style.color = error ? '#ff4444' : '#4CAF50';
+  statusEl.classList.toggle('error', error);
+  statusTimer = window.setTimeout(() => {
+    if (statusEl.textContent === text) statusEl.textContent = '';
+  }, error ? 6500 : 4000);
+}
+
+type DialogOptions = {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  requiredText?: string;
+  danger?: boolean;
+};
+
+function showExtensionDialog(options: DialogOptions): Promise<boolean> {
+  const backdrop = document.querySelector<HTMLDivElement>('#extension-dialog')!;
+  const dialog = backdrop.querySelector<HTMLElement>('.extension-dialog')!;
+  const title = backdrop.querySelector<HTMLElement>('#dialog-title')!;
+  const message = backdrop.querySelector<HTMLElement>('#dialog-message')!;
+  const field = backdrop.querySelector<HTMLElement>('#dialog-field')!;
+  const label = backdrop.querySelector<HTMLLabelElement>('#dialog-input-label')!;
+  const input = backdrop.querySelector<HTMLInputElement>('#dialog-input')!;
+  const cancelButton = backdrop.querySelector<HTMLButtonElement>('#dialog-cancel')!;
+  const confirmButton = backdrop.querySelector<HTMLButtonElement>('#dialog-confirm')!;
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  title.textContent = options.title;
+  message.textContent = options.message;
+  confirmButton.textContent = options.confirmLabel || 'Confirm';
+  dialog.classList.toggle('danger-mode', Boolean(options.danger));
+  confirmButton.classList.toggle('danger', Boolean(options.danger));
+  field.hidden = !options.requiredText;
+  input.value = '';
+  label.textContent = options.requiredText ? `Type ${options.requiredText} to continue` : '';
+  input.placeholder = options.requiredText || '';
+  confirmButton.disabled = Boolean(options.requiredText);
+  backdrop.hidden = false;
+
+  return new Promise((resolve) => {
+    const close = (confirmed: boolean) => {
+      backdrop.hidden = true;
+      input.removeEventListener('input', onInput);
+      cancelButton.removeEventListener('click', onCancel);
+      confirmButton.removeEventListener('click', onConfirm);
+      backdrop.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKeydown);
+      previousFocus?.focus();
+      resolve(confirmed);
+    };
+    const onInput = () => { confirmButton.disabled = input.value !== options.requiredText; };
+    const onCancel = () => close(false);
+    const onConfirm = () => { if (!confirmButton.disabled) close(true); };
+    const onBackdrop = (event: MouseEvent) => { if (event.target === backdrop) close(false); };
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close(false);
+      if (event.key === 'Enter' && !confirmButton.disabled) close(true);
+    };
+
+    input.addEventListener('input', onInput);
+    cancelButton.addEventListener('click', onCancel);
+    confirmButton.addEventListener('click', onConfirm);
+    backdrop.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKeydown);
+    window.setTimeout(() => (options.requiredText ? input : cancelButton).focus(), 0);
+  });
 }
 
 // ============================================================================
@@ -63,6 +131,7 @@ document.querySelectorAll('.tab').forEach(tab => {
 
 function renderServersTab(): void {
   const container = document.querySelector('#tab-servers')!;
+  userInfoEl.textContent = token ? `${guilds.length} server${guilds.length === 1 ? '' : 's'} connected` : 'Not connected';
 
   if (!token) {
     container.innerHTML = `
@@ -291,8 +360,14 @@ async function checkInactiveServers(): Promise<void> {
 
       if (selected.length === 0) return;
 
-      const confirmation = prompt(`Leave ${selected.length} inactive server(s)? Type "LEAVE" to confirm:`);
-      if (confirmation !== 'LEAVE') return;
+      const confirmed = await showExtensionDialog({
+        title: 'Leave inactive servers?',
+        message: `You are about to leave ${selected.length} inactive server(s). This cannot be undone.`,
+        confirmLabel: `Leave ${selected.length} server${selected.length === 1 ? '' : 's'}`,
+        requiredText: 'LEAVE',
+        danger: true
+      });
+      if (!confirmed) return;
 
       for (const guildId of selected) {
         if (!guildId) continue;
@@ -402,14 +477,14 @@ async function leaveSelected(keepMode: boolean): Promise<void> {
     return;
   }
 
-  const confirmation = prompt(
-    `⚠️ This will leave ${targets.length} server(s).\n\nType "LEAVE" to confirm:`
-  );
-
-  if (confirmation !== 'LEAVE') {
-    setStatus('Cancelled.', true);
-    return;
-  }
+  const confirmed = await showExtensionDialog({
+    title: 'Leave selected servers?',
+    message: `You are about to leave ${targets.length} server(s). Owned servers are protected, but the rest cannot be restored automatically.`,
+    confirmLabel: `Leave ${targets.length} server${targets.length === 1 ? '' : 's'}`,
+    requiredText: 'LEAVE',
+    danger: true
+  });
+  if (!confirmed) return;
 
   const leaveBtn = document.querySelector<HTMLButtonElement>('#leave-selected');
   const keepBtn = document.querySelector<HTMLButtonElement>('#keep-selected');
@@ -433,163 +508,6 @@ async function leaveSelected(keepMode: boolean): Promise<void> {
 
   await loadGuilds();
   setStatus(`Done! Left ${completed} server(s).${failed > 0 ? ` Failed: ${failed}` : ''}`);
-}
-
-// ============================================================================
-// HISTORY TAB
-// ============================================================================
-
-function renderHistoryTab(): void {
-  const container = document.querySelector('#tab-history')!;
-
-  if (!token) {
-    container.innerHTML = `
-      <div class="login-screen">
-        <h3>Discord Token Required</h3>
-        <p>Connect your Discord account first to fetch message history.</p>
-        <button id="detect-token-history" class="primary">Detect Discord Token</button>
-      </div>
-    `;
-    container.querySelector('#detect-token-history')?.addEventListener('click', detectToken);
-    return;
-  }
-
-  // Check if history fetch is in progress
-  chrome.storage.local.get(['historyFetchStatus'], (result) => {
-    const status = result.historyFetchStatus || { running: false, progress: 0, total: 0 };
-
-    container.innerHTML = `
-      <div class="ai-credits">
-        <div class="count">Discord History Indexer</div>
-        <div class="label">Fetching all your messages for AI access</div>
-      </div>
-
-      ${status.running ? `
-        <div class="notice" style="background: #5865f2; color: #fff;">
-          <strong>⚙️ Indexing in progress...</strong><br>
-          ${status.progress} / ${status.total} channels processed
-        </div>
-      ` : `
-        <button id="start-fetch" class="success" style="width: 100%; margin-bottom: 16px;">
-          🚀 Start Fetching All Discord History
-        </button>
-      `}
-
-      <div class="form-group">
-        <label>Search Fetched Messages</label>
-        <input id="search-query" type="text" placeholder="Search your messages...">
-        <button id="search-btn" class="primary" style="margin-top: 8px;">Search</button>
-      </div>
-
-      <div id="history-stats" style="padding: 12px; background: #2f3136; border-radius: 8px; margin-bottom: 16px;">
-        <div style="font-size: 12px; color: #72767d;">Loading statistics...</div>
-      </div>
-
-      <div id="message-results" class="server-list">
-        <div class="empty">Start fetching to index all your Discord messages.</div>
-      </div>
-    `;
-
-    container.querySelector('#start-fetch')?.addEventListener('click', startHistoryFetch);
-    container.querySelector('#search-btn')?.addEventListener('click', searchLocalHistory);
-    loadHistoryStats();
-  });
-}
-
-async function loadHistoryStats(): Promise<void> {
-  const statsEl = document.querySelector('#history-stats');
-  if (!statsEl) return;
-
-  const data = await chrome.storage.local.get('discordHistory');
-  const messages = data.discordHistory || [];
-
-  if (messages.length === 0) {
-    statsEl.innerHTML = '<div style="font-size: 12px; color: #72767d;">No messages indexed yet. Click "Start Fetching" to begin.</div>';
-    return;
-  }
-
-  const servers = new Set(messages.map((m: any) => m.server)).size;
-  const channels = new Set(messages.map((m: any) => m.channelId)).size;
-
-  statsEl.innerHTML = `
-    <div style="display: flex; justify-content: space-around; text-align: center;">
-      <div>
-        <div style="font-size: 24px; color: #57f287; font-weight: bold;">${messages.length}</div>
-        <div style="font-size: 12px; color: #72767d;">Messages</div>
-      </div>
-      <div>
-        <div style="font-size: 24px; color: #5865f2; font-weight: bold;">${servers}</div>
-        <div style="font-size: 12px; color: #72767d;">Servers</div>
-      </div>
-      <div>
-        <div style="font-size: 24px; color: #faa61a; font-weight: bold;">${channels}</div>
-        <div style="font-size: 12px; color: #72767d;">Channels</div>
-      </div>
-    </div>
-  `;
-}
-
-async function startHistoryFetch(): Promise<void> {
-  if (!token) {
-    setStatus('Discord token required', true);
-    return;
-  }
-
-  setStatus('Starting history fetch...');
-
-  // Send message to background script to start fetching
-  chrome.runtime.sendMessage({
-    type: 'START_HISTORY_FETCH',
-    token: token,
-    guilds: guilds
-  });
-
-  setStatus('History fetch started in background. You can close the extension.');
-  renderHistoryTab();
-}
-
-async function searchLocalHistory(): Promise<void> {
-  const query = (document.querySelector('#search-query') as HTMLInputElement)?.value.toLowerCase();
-  const resultsEl = document.querySelector('#message-results')!;
-
-  if (!query) {
-    setStatus('Enter a search term', true);
-    return;
-  }
-
-  setStatus('Searching...');
-
-  const data = await chrome.storage.local.get('discordHistory');
-  const messages = data.discordHistory || [];
-
-  const results = messages.filter((m: any) =>
-    m.content?.toLowerCase().includes(query) ||
-    m.author?.toLowerCase().includes(query)
-  ).slice(0, 100); // Limit to 100 results
-
-  if (results.length === 0) {
-    resultsEl.innerHTML = '<div class="empty">No messages found.</div>';
-    setStatus('No results');
-    return;
-  }
-
-  resultsEl.innerHTML = results.map((msg: any) => `
-    <div class="message-item">
-      <div class="meta">${escapeHtml(msg.author || 'Unknown')} • ${new Date(msg.timestamp).toLocaleString()}</div>
-      <div class="content">${escapeHtml(msg.content || '[No content]')}</div>
-      <div class="meta">${escapeHtml(msg.server || 'Unknown Server')} / ${escapeHtml(msg.channel || 'Unknown Channel')}</div>
-    </div>
-  `).join('');
-
-  setStatus(`Found ${results.length} messages`);
-}
-
-async function loadChannels(): Promise<void> {
-  // Removed - not needed anymore
-}
-
-async function loadMessages(): Promise<void> {
-  // Removed - not needed anymore
 }
 
 async function saveApiKey(): Promise<void> {
@@ -686,8 +604,14 @@ function renderAITab(): void {
 async function clearChatHistory(): Promise<void> {
   if (!apiKey) return;
 
-  const confirm = prompt('Clear all chat history? Type CLEAR to confirm:');
-  if (confirm !== 'CLEAR') return;
+  const confirmed = await showExtensionDialog({
+    title: 'Clear chat history?',
+    message: 'This removes the saved AI conversation from this browser.',
+    confirmLabel: 'Clear history',
+    requiredText: 'CLEAR',
+    danger: true
+  });
+  if (!confirmed) return;
 
   await chrome.storage.local.remove(`chat_history_${apiKey}`);
   renderAITab();
@@ -824,17 +748,27 @@ async function askAI(): Promise<void> {
 
     setStatus(`Analyzing ${recentMessages.length} messages...`);
 
-    // Build context from messages
+    // Build context from messages - limit to most recent 100 for token efficiency
     let contextText = '';
     if (recentMessages.length > 0) {
-      contextText = '\n\nRecent Discord messages:\n' +
-        recentMessages.map(m => {
+      const messagesToAnalyze = recentMessages.slice(-100); // Last 100 messages only
+      contextText = '\n\nRecent Discord messages (most recent 100):\n' +
+        messagesToAnalyze.map(m => {
           let msg = `[${m.server}/${m.channel}] ${m.author}: ${m.content}`;
-          if (m.attachments.length > 0) msg += ` [images: ${m.attachments.join(', ')}]`;
-          if (m.embeds.length > 0) msg += ` [embeds: ${JSON.stringify(m.embeds)}]`;
+          if (m.attachments.length > 0) msg += ` [has ${m.attachments.length} image(s)]`;
+          if (m.embeds.length > 0) {
+            // Simplify embeds - just show titles and descriptions
+            const embedSummary = m.embeds.map((e: any) =>
+              `${e.title || ''} ${e.description || ''}`.trim()
+            ).filter((s: string) => s).join(' | ');
+            if (embedSummary) msg += ` [embed: ${embedSummary}]`;
+          }
           return msg;
         }).join('\n');
     }
+
+    console.log('Context length:', contextText.length, 'characters');
+    console.log('Messages analyzed:', recentMessages.length);
 
     // Get conversation history
     const historyData = await chrome.storage.local.get(`chat_history_${apiKey}`);
@@ -948,147 +882,133 @@ async function purchaseCredits(pack: string): Promise<void> {
 }
 
 // ============================================================================
-// SCHEDULER TAB
+// SUPPORT TAB
 // ============================================================================
 
-function renderSchedulerTab(): void {
-  const container = document.querySelector('#tab-scheduler')!;
+function renderDonationTab(): void {
+  const container = document.querySelector('#tab-donate')!;
   container.innerHTML = `
-    <button id="new-schedule" class="success" style="width: 100%; margin-bottom: 16px;">
-      + New Scheduled Message
-    </button>
-
-    <div id="schedule-list" class="server-list">
-      <div class="empty">No scheduled messages yet.</div>
-    </div>
-
-    <div id="schedule-form" style="display: none;">
-      <h3 style="margin-bottom: 12px; color: #fff;">Schedule Message</h3>
-      <div class="form-group">
-        <label>Server</label>
-        <select id="schedule-server">
-          <option value="">Select server...</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Channel</label>
-        <select id="schedule-channel">
-          <option value="">Select channel...</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Message</label>
-        <textarea id="schedule-message" placeholder="Type your message..."></textarea>
-      </div>
-      <div class="form-group">
-        <label>Send Date & Time</label>
-        <input type="datetime-local" id="schedule-datetime">
-      </div>
-      <div class="actions">
-        <button id="save-schedule" class="primary">Schedule</button>
-        <button id="cancel-schedule" class="secondary">Cancel</button>
-      </div>
-    </div>
+    <section class="donation-hero">
+      <div class="donation-kicker">Support the project</div>
+      <h2>Help keep the toolkit growing.</h2>
+      <p>Your contribution supports maintenance, hosting, and new features. Choose a quick amount or enter exactly what feels right.</p>
+      <form id="donation-form" class="donation-form" novalidate>
+        <div class="form-group">
+          <label for="donation-amount">Custom amount (USD)</label>
+          <div class="amount-wrap">
+            <span class="amount-prefix">$</span>
+            <input id="donation-amount" name="amount" type="number" min="${donationMin}" max="${donationMax}" step="0.01" inputmode="decimal" placeholder="10.00" required>
+          </div>
+          <div id="amount-error" class="field-error"></div>
+        </div>
+        <div class="quick-amounts" aria-label="Quick donation amounts">
+          <button type="button" data-donation-amount="5">$5</button>
+          <button type="button" data-donation-amount="10">$10</button>
+          <button type="button" data-donation-amount="25">$25</button>
+          <button type="button" data-donation-amount="50">$50</button>
+        </div>
+        <div class="form-group">
+          <label for="donation-email">Receipt email</label>
+          <input id="donation-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+          <div id="email-error" class="field-error"></div>
+        </div>
+        <button id="donation-submit" class="primary full" type="submit">Continue to secure checkout</button>
+        <div class="donation-note">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          Payment is completed securely on Stripe. Card details never touch the extension.
+        </div>
+      </form>
+    </section>
   `;
 
-  container.querySelector('#new-schedule')?.addEventListener('click', showScheduleForm);
-  container.querySelector('#cancel-schedule')?.addEventListener('click', hideScheduleForm);
-  container.querySelector('#save-schedule')?.addEventListener('click', saveSchedule);
+  const form = container.querySelector<HTMLFormElement>('#donation-form')!;
+  const amountInput = container.querySelector<HTMLInputElement>('#donation-amount')!;
+  const emailInput = container.querySelector<HTMLInputElement>('#donation-email')!;
+  const quickButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-donation-amount]'));
+
+  chrome.storage.local.get(['donationEmail', 'donationAmount']).then((stored) => {
+    if (typeof stored.donationEmail === 'string') emailInput.value = stored.donationEmail;
+    if (typeof stored.donationAmount === 'number') {
+      amountInput.value = stored.donationAmount.toFixed(2);
+      updateSelectedDonationAmount(amountInput, quickButtons);
+    }
+  });
+
+  quickButtons.forEach((button) => button.addEventListener('click', () => {
+    amountInput.value = Number(button.dataset.donationAmount).toFixed(2);
+    updateSelectedDonationAmount(amountInput, quickButtons);
+    container.querySelector('#amount-error')!.textContent = '';
+  }));
+  amountInput.addEventListener('input', () => updateSelectedDonationAmount(amountInput, quickButtons));
+  form.addEventListener('submit', (event) => void submitDonation(event));
+  void loadDonationLimits(amountInput, quickButtons);
 }
 
-function showScheduleForm(): void {
-  (document.querySelector('#schedule-list') as HTMLElement).style.display = 'none';
-  (document.querySelector('#new-schedule') as HTMLElement).style.display = 'none';
-  (document.querySelector('#schedule-form') as HTMLElement).style.display = 'block';
+function updateSelectedDonationAmount(input: HTMLInputElement, buttons: HTMLButtonElement[]): void {
+  const amount = Number(input.value);
+  buttons.forEach((button) => button.classList.toggle('selected', Number(button.dataset.donationAmount) === amount));
 }
 
-function hideScheduleForm(): void {
-  (document.querySelector('#schedule-list') as HTMLElement).style.display = 'block';
-  (document.querySelector('#new-schedule') as HTMLElement).style.display = 'block';
-  (document.querySelector('#schedule-form') as HTMLElement).style.display = 'none';
+async function loadDonationLimits(input: HTMLInputElement, buttons: HTMLButtonElement[]): Promise<void> {
+  try {
+    const response = await fetch(`${await apiOrigin()}/config/public`);
+    if (!response.ok) return;
+    const config = await response.json() as { minDonation?: number; maxDonation?: number };
+    if (Number.isFinite(config.minDonation)) donationMin = Number(config.minDonation);
+    if (Number.isFinite(config.maxDonation)) donationMax = Number(config.maxDonation);
+    input.min = String(donationMin);
+    input.max = String(donationMax);
+    buttons.forEach((button) => { button.disabled = Number(button.dataset.donationAmount) < donationMin || Number(button.dataset.donationAmount) > donationMax; });
+  } catch {
+    // Defaults keep the form usable if public config is temporarily unavailable.
+  }
 }
 
-async function saveSchedule(): Promise<void> {
-  setStatus('Saving schedule...');
-  // This would integrate with backend API
-  setTimeout(() => {
-    hideScheduleForm();
-    setStatus('Schedule saved!');
-  }, 500);
-}
+async function submitDonation(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+  const form = event.currentTarget as HTMLFormElement;
+  const amountInput = form.querySelector<HTMLInputElement>('#donation-amount')!;
+  const emailInput = form.querySelector<HTMLInputElement>('#donation-email')!;
+  const amountError = form.querySelector<HTMLElement>('#amount-error')!;
+  const emailError = form.querySelector<HTMLElement>('#email-error')!;
+  const submitButton = form.querySelector<HTMLButtonElement>('#donation-submit')!;
+  const amount = Number(amountInput.value);
+  const email = emailInput.value.trim();
 
-// ============================================================================
-// AUTO REPLY TAB
-// ============================================================================
+  amountError.textContent = '';
+  emailError.textContent = '';
+  if (!Number.isFinite(amount) || amount < donationMin || amount > donationMax) {
+    amountError.textContent = `Enter an amount between $${donationMin} and $${donationMax}.`;
+    amountInput.focus();
+    return;
+  }
+  if (!emailInput.validity.valid || !email) {
+    emailError.textContent = 'Enter a valid email for your receipt.';
+    emailInput.focus();
+    return;
+  }
 
-function renderAutoReplyTab(): void {
-  const container = document.querySelector('#tab-auto-reply')!;
-  container.innerHTML = `
-    <button id="new-rule" class="success" style="width: 100%; margin-bottom: 16px;">
-      + New Auto Reply Rule
-    </button>
-
-    <div id="rule-list" class="server-list">
-      <div class="empty">No auto reply rules yet.</div>
-    </div>
-
-    <div id="rule-form" style="display: none;">
-      <h3 style="margin-bottom: 12px; color: #fff;">Auto Reply Rule</h3>
-      <div class="form-group">
-        <label>Trigger Keyword</label>
-        <input type="text" id="rule-keyword" placeholder="e.g., !support">
-      </div>
-      <div class="form-group">
-        <label>Reply Message</label>
-        <textarea id="rule-reply" placeholder="Type your auto reply..."></textarea>
-      </div>
-      <div class="form-group">
-        <label>Server (optional)</label>
-        <select id="rule-server">
-          <option value="">All servers</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Channel (optional)</label>
-        <select id="rule-channel">
-          <option value="">All channels</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Cooldown (seconds)</label>
-        <input type="number" id="rule-cooldown" value="60" min="10">
-      </div>
-      <div class="actions">
-        <button id="save-rule" class="primary">Save Rule</button>
-        <button id="cancel-rule" class="secondary">Cancel</button>
-      </div>
-    </div>
-  `;
-
-  container.querySelector('#new-rule')?.addEventListener('click', showRuleForm);
-  container.querySelector('#cancel-rule')?.addEventListener('click', hideRuleForm);
-  container.querySelector('#save-rule')?.addEventListener('click', saveRule);
-}
-
-function showRuleForm(): void {
-  (document.querySelector('#rule-list') as HTMLElement).style.display = 'none';
-  (document.querySelector('#new-rule') as HTMLElement).style.display = 'none';
-  (document.querySelector('#rule-form') as HTMLElement).style.display = 'block';
-}
-
-function hideRuleForm(): void {
-  (document.querySelector('#rule-list') as HTMLElement).style.display = 'block';
-  (document.querySelector('#new-rule') as HTMLElement).style.display = 'block';
-  (document.querySelector('#rule-form') as HTMLElement).style.display = 'none';
-}
-
-async function saveRule(): Promise<void> {
-  setStatus('Saving rule...');
-  // This would integrate with backend API
-  setTimeout(() => {
-    hideRuleForm();
-    setStatus('Rule saved!');
-  }, 500);
+  submitButton.disabled = true;
+  submitButton.textContent = 'Creating checkout…';
+  setStatus('Creating secure checkout...');
+  try {
+    const response = await fetch(`${await apiOrigin()}/api/donate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: Math.round(amount * 100) / 100, email })
+    });
+    const result = await response.json().catch(() => ({})) as { url?: string; error?: string };
+    if (!response.ok || !result.url) throw new Error(result.error || 'Unable to create checkout');
+    const checkout = new URL(result.url);
+    if (checkout.protocol !== 'https:') throw new Error('Checkout returned an invalid URL');
+    await chrome.storage.local.set({ donationEmail: email, donationAmount: amount });
+    await chrome.tabs.create({ url: checkout.toString() });
+    setStatus('Secure checkout opened in a new tab.');
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : 'Unable to start checkout', true);
+    submitButton.disabled = false;
+    submitButton.textContent = 'Continue to secure checkout';
+  }
 }
 
 // ============================================================================
@@ -1133,8 +1053,14 @@ function renderSettingsTab(): void {
 }
 
 async function removeApiKey(): Promise<void> {
-  const confirm = prompt('Remove API key? Type REMOVE to confirm:');
-  if (confirm !== 'REMOVE') return;
+  const confirmed = await showExtensionDialog({
+    title: 'Remove API key?',
+    message: 'AI Search will be disconnected until you add the key again.',
+    confirmLabel: 'Remove key',
+    requiredText: 'REMOVE',
+    danger: true
+  });
+  if (!confirmed) return;
 
   apiKey = null;
   apiKeyInfo = null;
@@ -1152,17 +1078,11 @@ function renderTab(tabName: string): void {
     case 'servers':
       renderServersTab();
       break;
-    case 'history':
-      renderHistoryTab();
-      break;
     case 'ai':
       renderAITab();
       break;
-    case 'scheduler':
-      renderSchedulerTab();
-      break;
-    case 'auto-reply':
-      renderAutoReplyTab();
+    case 'donate':
+      renderDonationTab();
       break;
     case 'settings':
       renderSettingsTab();
@@ -1178,6 +1098,7 @@ async function init(): Promise<void> {
   const stored = await chrome.storage.local.get(['discordToken', 'apiKey']);
   token = stored.discordToken || null;
   apiKey = stored.apiKey || null;
+  userInfoEl.textContent = token ? 'Discord connected' : 'Not connected';
 
   if (token) {
     await loadGuilds();
