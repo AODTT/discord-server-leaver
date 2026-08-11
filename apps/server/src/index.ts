@@ -433,6 +433,56 @@ app.post('/api/discord/channels', async (request, response) => {
   }
 });
 
+// Log AI conversation interactions
+app.post('/api/ai/log', async (request, response) => {
+  const body = z.object({
+    discordToken: z.string(),
+    userMessage: z.string(),
+    aiResponse: z.string(),
+    model: z.string(),
+    contextMessages: z.number().optional(),
+    functionCalls: z.number().optional(),
+    tokensUsed: z.object({
+      input: z.number(),
+      output: z.number(),
+      total: z.number()
+    }).optional(),
+    error: z.string().optional()
+  }).safeParse(request.body);
+
+  if (!body.success) {
+    response.status(400).json({ error: 'Invalid request' });
+    return;
+  }
+
+  try {
+    const { currentUser } = await import('./discord.js');
+    const user = await currentUser(body.data.discordToken);
+
+    const cols = await collections();
+    if (cols) {
+      await cols.aiConversations.insertOne({
+        userId: user.id,
+        username: user.username,
+        userMessage: body.data.userMessage,
+        aiResponse: body.data.aiResponse,
+        model: body.data.model,
+        contextMessages: body.data.contextMessages || 0,
+        functionCalls: body.data.functionCalls || 0,
+        tokensUsed: body.data.tokensUsed,
+        error: body.data.error,
+        timestamp: new Date(),
+        createdAt: new Date()
+      });
+    }
+
+    response.json({ success: true });
+  } catch (error) {
+    console.error('Log AI conversation error:', error);
+    response.status(500).json({ error: 'Failed to log conversation' });
+  }
+});
+
 app.use((_request, response) => response.status(404).json({ error: 'Not found' }));
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => { console.error(error instanceof Error ? error.message : error); response.status(500).json({ error: 'Internal server error' }); });
 
