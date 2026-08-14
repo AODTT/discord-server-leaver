@@ -230,7 +230,7 @@ export const discordTools: DiscordTool[] = [
   },
   {
     name: 'get_user_by_username',
-    description: 'Search for a Discord user by username or display name across all servers',
+    description: 'Search for a Discord user by username or display name across all servers. Returns user ID which can be used with create_dm.',
     parameters: {
       type: 'object',
       properties: {
@@ -254,7 +254,7 @@ export const discordTools: DiscordTool[] = [
       // Search through guilds for the user
       for (const guild of guilds) {
         try {
-          // Get guild members - search for the user
+          // Method 1: Try member search endpoint
           const searchResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/members/search?query=${encodeURIComponent(searchName)}&limit=10`, {
             headers: { 'Authorization': token }
           });
@@ -274,7 +274,34 @@ export const discordTools: DiscordTool[] = [
                 global_name: match.user.global_name,
                 discriminator: match.user.discriminator,
                 avatar: match.user.avatar,
-                found_in_guild: guild.name
+                found_in_guild: guild.name,
+                guild_id: guild.id
+              };
+            }
+          }
+
+          // Method 2: Try listing members (for smaller servers)
+          const listResponse = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/members?limit=1000`, {
+            headers: { 'Authorization': token }
+          });
+
+          if (listResponse.ok) {
+            const members = await listResponse.json();
+            const match = members.find((m: any) =>
+              m.user.username.toLowerCase() === searchName ||
+              m.user.global_name?.toLowerCase() === searchName ||
+              m.nick?.toLowerCase() === searchName
+            );
+
+            if (match) {
+              return {
+                id: match.user.id,
+                username: match.user.username,
+                global_name: match.user.global_name,
+                discriminator: match.user.discriminator,
+                avatar: match.user.avatar,
+                found_in_guild: guild.name,
+                guild_id: guild.id
               };
             }
           }
@@ -284,7 +311,7 @@ export const discordTools: DiscordTool[] = [
         }
       }
 
-      throw new Error(`User "${params.username}" not found in any mutual servers`);
+      throw new Error(`User "${params.username}" not found in any mutual servers. Try using their exact Discord username.`);
     }
   },
   {

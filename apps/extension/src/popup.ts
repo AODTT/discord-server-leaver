@@ -634,7 +634,7 @@ function renderAITab(): void {
                 <button type="button" data-ai-prompt="Find the most important updates from today.">Find today's updates</button>
               </div>
             </div>
-          ` : savedHistory.map((msg: any) => aiMessageMarkup(msg.role, msg.content)).join('')}
+          ` : savedHistory.map((msg: any) => aiMessageMarkup(msg.role, msg.content, [], msg.timestamp)).join('')}
         </div>
 
         <div class="ai-composer-wrap" id="ai-drop-zone">
@@ -698,6 +698,12 @@ function renderAITab(): void {
       textarea.focus();
     }));
 
+    // Add delete message handlers
+    container.querySelectorAll<HTMLButtonElement>('[data-delete-message]').forEach((button) => button.addEventListener('click', () => {
+      const timestamp = parseInt(button.dataset.deleteMessage || '0', 10);
+      if (timestamp) void deleteChatMessage(timestamp);
+    }));
+
     renderAiImagePreviews();
     resizeAiComposer();
     const chatHistoryEl = container.querySelector('#ai-chat-history')!;
@@ -705,14 +711,15 @@ function renderAITab(): void {
   });
 }
 
-function aiMessageMarkup(role: string, content: string, imageUrls: string[] = []): string {
+function aiMessageMarkup(role: string, content: string, imageUrls: string[] = [], timestamp?: number): string {
   const isUser = role === 'user';
   const images = imageUrls.length ? `<div class="ai-message-images">${imageUrls.map((url) => `<img src="${url}" alt="Attached image">`).join('')}</div>` : '';
+  const deleteBtn = timestamp ? `<button class="ai-message-delete" data-delete-message="${timestamp}" title="Delete this message" aria-label="Delete message">×</button>` : '';
   return `
-    <article class="ai-message-row ${isUser ? 'user' : 'assistant'}">
+    <article class="ai-message-row ${isUser ? 'user' : 'assistant'}" data-message-timestamp="${timestamp || ''}">
       <span class="ai-message-avatar" aria-hidden="true">${isUser ? 'Y' : 'AI'}</span>
       <div class="ai-message-body">
-        <div class="ai-message-author">${isUser ? 'You' : 'AI Search'}</div>
+        <div class="ai-message-author">${isUser ? 'You' : 'AI Search'}${deleteBtn}</div>
         ${images}
         <div class="ai-message-content">${escapeHtml(content)}</div>
       </div>
@@ -784,6 +791,18 @@ async function clearChatHistory(): Promise<void> {
   await chrome.storage.local.remove(`chat_history_${apiKey || 'trial'}`);
   renderAITab();
   setStatus('Chat history cleared');
+}
+
+async function deleteChatMessage(timestamp: number): Promise<void> {
+  const key = `chat_history_${apiKey || 'trial'}`;
+  const data = await chrome.storage.local.get(key);
+  const history = data[key] || [];
+
+  const filtered = history.filter((msg: any) => msg.timestamp !== timestamp);
+  await chrome.storage.local.set({ [key]: filtered });
+
+  renderAITab();
+  setStatus('Message deleted');
 }
 
 async function askAI(): Promise<void> {
@@ -1097,7 +1116,7 @@ Be conversational, confident, and take initiative. Use tools without asking perm
         tools: getToolDefinitions(),
         tool_choice: 'auto',
         temperature: 0.7,
-        max_tokens: 2000
+        max_tokens: 4000 // Increased from 2000 for longer responses
       })
     });
 
@@ -1245,7 +1264,7 @@ Be conversational, confident, and take initiative. Use tools without asking perm
           tools: getToolDefinitions(),
           tool_choice: 'auto',
           temperature: 0.7,
-          max_tokens: 2000
+          max_tokens: 4000 // Increased from 2000 for longer responses
         })
       });
 
