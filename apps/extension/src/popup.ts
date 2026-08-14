@@ -460,7 +460,7 @@ async function detectToken(): Promise<void> {
       if (container && statusText) {
         statusText.textContent = 'Could not detect Discord token.';
         const notice = container.querySelector('.notice');
-        if (notice) {
+        if (notice && !container.querySelector('#retry-detect')) {
           notice.insertAdjacentHTML('afterend', '<button id="retry-detect" class="primary" style="margin-top: 12px;">Retry Detection</button>');
           container.querySelector('#retry-detect')?.addEventListener('click', detectToken);
         }
