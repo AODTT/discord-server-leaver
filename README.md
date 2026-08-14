@@ -1,14 +1,23 @@
-# Discord Memory Toolkit
+# Discord Server Leaver
 
-A from-scratch, policy-conscious remake of **Discord Server Leaver**. It keeps the original bulk server-management workflow and adds local message-history import/search, cloud sync, cited AI retrieval, saved memories, credit packs, bot-based scheduling, and guarded keyword auto-replies.
+Discord Server Leaver helps you organize your Discord account by quickly removing unwanted servers. Select the servers you want to keep and leave all others, or choose specific servers to leave one-by-one. 
 
-The project intentionally does **not** accept raw Discord user tokens, inject scripts into Discord, or automate a normal Discord account. Complete personal history comes from a user-selected official Discord Data Package. Live messages and automation use an installed Discord bot in explicitly configured server channels.
+**Important:** You must be logged into Discord in your browser (discord.com) for this extension to work. It does not work with the Discord desktop app.
+
+The extension is built for speed and simplicity, so you can clean up a crowded server list without the hassle. Whether you joined too many communities over time or just want a fresh start, Discord Server Leaver gives you an easy way to take control and stay organized.
+
+## Features
+
+- **Bulk Server Management** - Leave multiple servers at once
+- **AI Search** - Search your Discord conversations with AI-powered context (3 free trial uses)
+- **Discord Function Calling** - Send messages, search users, create DMs via AI commands
+- **Smart Context** - Automatically fetches relevant Discord messages for trade analysis and more
+- **Safe & Private** - All actions require confirmation, no data leaves your control
 
 ## Repository
 
-- `apps/extension` — Manifest V3 Chrome extension with IndexedDB-backed local history.
-- `apps/server` — TypeScript API, Discord OAuth/bot, MongoDB storage, AI retrieval, Stripe credits, scheduler, and privacy endpoints.
-- `docs` — setup, data handling, store disclosure, and acceptance checklist.
+- `apps/extension` — Chrome extension with AI chat and Discord API integration
+- `apps/server` — TypeScript API, MongoDB logging, and analytics
 
 ## Local setup
 
@@ -18,9 +27,16 @@ The project intentionally does **not** accept raw Discord user tokens, inject sc
 4. Start the API with `npm run dev:server`.
 5. Build the extension with `npm run build -w @discord-memory/extension`.
 6. Load `apps/extension/dist` as an unpacked extension in Chrome.
+7. **Important:** Open discord.com in your browser and log in before using the extension.
 
-OAuth, AI, bot automation, and checkout controls stay visibly unavailable until their server-side configuration exists. Local Data Package import/search works without a paid account.
+## How to Use
+
+1. Install the extension
+2. Go to [discord.com](https://discord.com) and log in
+3. Click the extension icon
+4. Use the **Servers** tab to leave unwanted servers
+5. Use the **AI** tab to search conversations and send messages
 
 ## Safety boundary
 
-Leaving servers is destructive. The UI shows an exact preview, prevents owner guilds from being selected, requires typed confirmation, sends one request at a time, and reports every success/failure. Scheduling and auto-replies are sent by the bot, require server-management permission, have minimum cooldowns and hourly caps, and can be disabled per rule or server.
+Leaving servers is destructive. The UI shows an exact preview, prevents owner guilds from being selected, requires typed confirmation, sends one request at a time, and reports every success/failure.

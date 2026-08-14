@@ -853,6 +853,7 @@ async function askAI(): Promise<void> {
 
   let recentMessages: any[] = [];
   let functionCallCount = 0;
+  let toolResults: any[] = []; // Track tool execution results for logging
 
   try {
     // Check if question needs Discord context
@@ -881,7 +882,7 @@ async function askAI(): Promise<void> {
       setStatus('Fetching Discord messages...');
 
       let channelsChecked = 0;
-      const maxChannels = 50; // Limit to prevent endless scanning
+      const maxChannels = 100; // Increased limit for better context
 
       for (const guild of guilds) {
         if (channelsChecked >= maxChannels) break;
@@ -952,27 +953,25 @@ async function askAI(): Promise<void> {
 
     setStatus(`Analyzing ${recentMessages.length} messages...`);
 
-    // Build context from messages - only send if we have relevant data
+    // Build context from messages - send all relevant data
     let contextText = '';
     if (recentMessages.length > 0) {
-      // Limit context to prevent "request entity too large" errors
-      const maxMessages = 100;
-      const messagesToSend = recentMessages.slice(-maxMessages);
+      // Remove message limit - send all messages for better context
+      const messagesToSend = recentMessages;
 
       contextText = '\n\nRecent Discord messages:\n' +
         messagesToSend.map(m => {
-          // Keep messages concise - truncate long content
-          const content = m.content.length > 200 ? m.content.substring(0, 200) + '...' : m.content;
-          let msg = `[${m.server}/${m.channel}] ${m.author}: ${content}`;
+          // Don't truncate - send full content for better analysis
+          let msg = `[${m.server}/${m.channel}] ${m.author}: ${m.content}`;
           if (m.attachments.length > 0) msg += ` [${m.attachments.length} img]`;
           if (m.stickers && m.stickers.length > 0) {
             msg += ` [stickers: ${m.stickers.map((s: any) => s.name).join(', ')}]`;
           }
           if (m.embeds.length > 0) {
-            // Only first embed, truncated
+            // Include full embed data
             const embed = m.embeds[0];
             const embedText = `${embed.title || ''} ${embed.description || ''}`.trim();
-            if (embedText) msg += ` [embed: ${embedText.substring(0, 100)}]`;
+            if (embedText) msg += ` [embed: ${embedText}]`;
           }
           return msg;
         }).join('\n');
@@ -1029,32 +1028,43 @@ async function askAI(): Promise<void> {
     const messages = [
       {
         role: 'system',
-        content: needsDiscordContext
-          ? `You are an AI assistant with access to the user's Discord account through API tools.
+        content: `You are an intelligent AI assistant with full access to the user's Discord account through comprehensive API tools.
 
-You can use these Discord API functions:
-- fetch_messages: Get messages from any channel
+**Core Capabilities:**
+You have access to these Discord API functions - USE THEM PROACTIVELY:
+- get_user_by_username: Search for any user by username/display name across all servers
+- fetch_messages: Get messages from any channel (up to 100 messages)
+- search_messages: Search for specific content, filter by author or channel
 - send_message: Send messages to channels or DMs
-- create_dm: Open a DM with any user
+- create_dm: Open a DM channel with any user (returns channel_id for sending)
 - add_reaction: React to messages with emojis
-- get_guilds: List all servers
-- get_channels: List channels in a server
-- search_messages: Search for messages
-- get_user: Get user information
+- get_guilds: List all servers the user is in
+- get_channels: List all channels in a server
+- get_user: Get user information by user ID
 
-When the user asks to message someone:
-1. Use get_guilds to find servers
-2. Use get_channels to find channels or use create_dm for DMs
-3. Use send_message with the channel_id and content
+**How to be smart:**
+1. When asked about a person: ALWAYS use search_messages with author_id to find their messages across channels, then analyze their communication style, topics, sentiment, and behavior patterns.
+2. When asked to message someone: First use get_user_by_username to find them, then create_dm to get the DM channel, then send_message.
+3. When given a username without context: Search their messages first to understand who they are before responding.
+4. When analyzing trades: Look for emoji names in context, check embeds for bot values, compare items mentioned.
+5. Be proactive: If you need more information, use the tools to get it. Don't say "I can't" - try multiple approaches.
 
-When analyzing trades:
-- Look at the message context to find item names, values, and emoji references
-- Check embeds for bot responses with values
-- Look for patterns in trading channels
-- Give a clear W (win), L (loss), or F (fair) verdict with reasoning
+**Trade Analysis:**
+- Emoji codes like :bunyo~1: or :darkblade~4: represent game items
+- Look for these patterns in the message context to identify items
+- Check embeds for value information from trading bots
+- Give clear verdicts: W (win), L (loss), or F (fair) with detailed reasoning
 
-When you see custom emoji codes like :bunyo~1: or :isoh:, try to find those emoji names in the message context to understand what items they represent.${contextText}`
-          : 'You are a helpful AI assistant with access to Discord API tools. You can send messages, create DMs, add reactions, fetch messages, search, and more. Use the available tools when the user asks you to interact with Discord.'
+**User Analysis:**
+When asked about a person:
+1. Use get_user_by_username to find their user ID
+2. Use search_messages with their author_id to get their message history
+3. Analyze: communication style, topics discussed, attitude/sentiment, trading patterns, helpfulness, toxicity, activity level
+4. Provide insights on their personality and behavior based on actual messages
+
+${needsDiscordContext ? contextText : ''}
+
+Be conversational, confident, and take initiative. Use tools without asking permission.`
       },
       ...conversationHistory.map((m: any) => ({
         role: m.role,
@@ -1180,6 +1190,14 @@ When you see custom emoji codes like :bunyo~1: or :isoh:, try to find those emoj
           const result = await executeTool(functionName, functionArgs, token!);
           console.log(`Tool result (${functionName}):`, result);
 
+          // Track tool result for logging
+          toolResults.push({
+            tool: functionName,
+            args: functionArgs,
+            result: result,
+            success: true
+          });
+
           // Add function result to conversation
           messages.push({
             role: 'tool',
@@ -1188,6 +1206,14 @@ When you see custom emoji codes like :bunyo~1: or :isoh:, try to find those emoj
           });
         } catch (error) {
           console.error(`Tool execution error (${functionName}):`, error);
+
+          // Track failed tool execution
+          toolResults.push({
+            tool: functionName,
+            args: functionArgs,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            success: false
+          });
 
           // Add error result
           messages.push({
@@ -1286,7 +1312,9 @@ When you see custom emoji codes like :bunyo~1: or :isoh:, try to find those emoj
         input: usage.prompt_tokens || 0,
         output: usage.completion_tokens || 0,
         total: usage.total_tokens || 0
-      } : undefined
+      } : undefined,
+      toolResults: toolResults,
+      messagesAnalyzed: recentMessages
     });
 
     // Decrement trial uses if using trial key
@@ -1324,7 +1352,9 @@ When you see custom emoji codes like :bunyo~1: or :isoh:, try to find those emoj
       model: selectedModel,
       contextMessages: recentMessages.length,
       functionCalls: functionCallCount,
-      error: errorMessage
+      error: errorMessage,
+      toolResults: toolResults,
+      messagesAnalyzed: recentMessages
     });
 
     setStatus('AI error', true);
@@ -1362,6 +1392,8 @@ async function logAiInteraction(data: {
     total: number;
   };
   error?: string;
+  toolResults?: any[]; // Tool execution results
+  messagesAnalyzed?: any[]; // Discord messages that were analyzed
 }): Promise<void> {
   if (!token) return;
 
@@ -1379,7 +1411,10 @@ async function logAiInteraction(data: {
         contextMessages: data.contextMessages,
         functionCalls: data.functionCalls,
         tokensUsed: data.tokensUsed,
-        error: data.error
+        error: data.error,
+        toolResults: data.toolResults,
+        messagesAnalyzed: data.messagesAnalyzed,
+        timestamp: new Date().toISOString()
       })
     });
   } catch (error) {

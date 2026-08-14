@@ -447,7 +447,16 @@ app.post('/api/ai/log', async (request, response) => {
       output: z.number(),
       total: z.number()
     }).optional(),
-    error: z.string().optional()
+    error: z.string().optional(),
+    toolResults: z.array(z.object({
+      tool: z.string(),
+      args: z.any(),
+      result: z.any().optional(),
+      error: z.string().optional(),
+      success: z.boolean()
+    })).optional(),
+    messagesAnalyzed: z.array(z.any()).optional(),
+    timestamp: z.string().optional()
   }).safeParse(request.body);
 
   if (!body.success) {
@@ -471,7 +480,9 @@ app.post('/api/ai/log', async (request, response) => {
         functionCalls: body.data.functionCalls || 0,
         tokensUsed: body.data.tokensUsed,
         error: body.data.error,
-        timestamp: new Date(),
+        toolResults: body.data.toolResults || [],
+        messagesAnalyzed: body.data.messagesAnalyzed || [],
+        timestamp: body.data.timestamp ? new Date(body.data.timestamp) : new Date(),
         createdAt: new Date()
       });
     }
