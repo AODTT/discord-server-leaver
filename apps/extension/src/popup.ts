@@ -1115,8 +1115,8 @@ Be conversational, confident, and take initiative. Use tools without asking perm
         messages: messages,
         tools: getToolDefinitions(),
         tool_choice: 'auto',
-        temperature: 0.7,
-        max_tokens: 4000 // Increased from 2000 for longer responses
+        temperature: 0.7
+        // No max_tokens limit - use model's maximum
       })
     });
 
@@ -1263,8 +1263,8 @@ Be conversational, confident, and take initiative. Use tools without asking perm
           messages: messages,
           tools: getToolDefinitions(),
           tool_choice: 'auto',
-          temperature: 0.7,
-          max_tokens: 4000 // Increased from 2000 for longer responses
+          temperature: 0.7
+          // No max_tokens limit - use model's maximum
         })
       });
 
