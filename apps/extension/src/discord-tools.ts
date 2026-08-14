@@ -229,6 +229,70 @@ export const discordTools: DiscordTool[] = [
     }
   },
   {
+    name: 'search_emoji_usage',
+    description: 'Search for messages containing a specific emoji pattern (like :hollowwender: or :MC:) to understand item names and values. Use this when analyzing trades to find what items are actually called.',
+    parameters: {
+      type: 'object',
+      properties: {
+        emoji_name: {
+          type: 'string',
+          description: 'The emoji name to search for (without colons, e.g., "hollowwender" or "MC")'
+        },
+        guild_id: {
+          type: 'string',
+          description: 'The Discord server (guild) ID to search in'
+        }
+      },
+      required: ['emoji_name', 'guild_id']
+    },
+    execute: async (params, token) => {
+      // Search for the emoji pattern in messages
+      const searchParams = new URLSearchParams({
+        content: `:${params.emoji_name}:`
+      });
+
+      const response = await fetch(`https://discord.com/api/v10/guilds/${params.guild_id}/messages/search?${searchParams}`, {
+        headers: { 'Authorization': token }
+      });
+      if (!response.ok) throw new Error(`Failed to search emoji usage: ${response.status}`);
+      const result = await response.json();
+
+      // Return messages that contain this emoji
+      return {
+        emoji: params.emoji_name,
+        total_results: result.total_results || 0,
+        messages: result.messages ? result.messages.flat().slice(0, 20) : []
+      };
+    }
+  },
+  {
+    name: 'get_guild_members',
+    description: 'Get all members from a specific guild/server. Use this to find users in a particular server.',
+    parameters: {
+      type: 'object',
+      properties: {
+        guild_id: {
+          type: 'string',
+          description: 'The Discord server (guild) ID to get members from'
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of members to fetch (1-1000, default 1000)',
+          default: 1000
+        }
+      },
+      required: ['guild_id']
+    },
+    execute: async (params, token) => {
+      const limit = Math.min(params.limit || 1000, 1000);
+      const response = await fetch(`https://discord.com/api/v10/guilds/${params.guild_id}/members?limit=${limit}`, {
+        headers: { 'Authorization': token }
+      });
+      if (!response.ok) throw new Error(`Failed to fetch guild members: ${response.status}`);
+      return await response.json();
+    }
+  },
+  {
     name: 'get_user_by_username',
     description: 'Search for a Discord user by username or display name across all servers. Returns user ID which can be used with create_dm.',
     parameters: {
